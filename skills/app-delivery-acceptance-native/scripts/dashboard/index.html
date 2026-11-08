@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>交付验收 · 实时看板</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script defer src="/dashboard.js"></script>
+</head>
+<body>
+  <main>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">交付验收 / 实时看板</p>
+        <h1 id="acceptance">交付验收</h1>
+        <p id="version" class="muted">正在读取当前验收</p>
+      </div>
+      <div class="live-controls">
+        <span id="connection" role="status">正在连接</span>
+        <button id="refresh" type="button">立即刷新</button>
+      </div>
+    </header>
+    <section id="summary" class="summary" aria-label="场景汇总"></section>
+    <section class="board" aria-label="验收追踪">
+      <div class="tools">
+        <div><h2>验收追踪</h2><p id="count" class="muted" role="status">等待结果</p></div>
+        <div class="filters">
+          <label>搜索<input id="search" type="search" placeholder="需求、场景或用例 ID"></label>
+          <label>状态<select id="filter">
+            <option value="">全部状态</option>
+            <option value="not_executed">未执行</option>
+            <option value="pending_review">待独立复审</option>
+            <option value="passed">通过</option>
+            <option value="product_defect">产品缺陷</option>
+            <option value="other">需处理或旧版本</option>
+          </select></label>
+        </div>
+      </div>
+      <div class="table-scroll" tabindex="0" aria-label="五列追踪表">
+        <table>
+          <thead><tr><th scope="col">需求 / 规则</th><th scope="col">测试场景</th><th scope="col">用例 / 操作</th><th scope="col">实际执行</th><th scope="col">独立复审</th></tr></thead>
+          <tbody id="rows"><tr><td colspan="5">正在读取记录</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <dialog id="detail" aria-labelledby="detail-title">
+    <div class="dialog-top">
+      <div><button id="back" type="button" hidden>← 返回</button><h2 id="detail-title">详情</h2></div>
+      <form method="dialog"><button id="close-detail" autofocus>关闭</button></form>
+    </div>
+    <div id="detail-update" class="notice" hidden>
+      <span>看板有新记录。当前详情保留打开时的内容。</span>
+      <button id="refresh-detail" type="button">更新详情</button>
+    </div>
+    <div id="tabs" class="tabs" role="tablist" aria-label="详情内容">
+      <button type="button" id="overview" role="tab" aria-controls="detail-body">概览</button>
+      <button type="button" id="relations" role="tab" aria-controls="detail-body">关联关系</button>
+      <button type="button" id="sources" role="tab" aria-controls="detail-body">依据与记录</button>
+    </div>
+    <div id="detail-body" role="tabpanel" tabindex="0"></div>
+  </dialog>
+</body>
+</html>

@@ -235,9 +235,21 @@ class OperationsTests(unittest.TestCase):
             try:
                 url = json.loads(server.stdout.readline())["url"]
                 with urllib.request.urlopen(url, timeout=5) as response:
-                    self.assertIn("独立复审", response.read().decode())
+                    page = response.read().decode()
+                    self.assertIn("独立复审", page)
+                    self.assertIn('/dashboard.js', page)
+                with urllib.request.urlopen(url + "dashboard.js", timeout=5) as response:
+                    self.assertEqual(response.headers["Cache-Control"], "no-store")
+                    self.assertIn(b"setInterval(refresh, 5000)", response.read())
                 with urllib.request.urlopen(url + "snapshot.json", timeout=5) as response:
-                    self.assertEqual(json.load(response)["scenes"]["SC1"]["status"], "passed")
+                    live = json.load(response)
+                    scene = live["scenes"]["SC1"]
+                    self.assertEqual(scene["status"], "passed")
+                    self.assertEqual(scene["current_runs"][case_id], formal["request_id"])
+                    self.assertEqual(scene["case_design"][case_id]["design_review"]["status"], "passed")
+                first_evidence = next(iter(live["evidence"]))
+                with urllib.request.urlopen(url.rstrip("/") + live["evidence_urls"][first_evidence], timeout=5) as response:
+                    self.assertEqual(hashlib.sha256(response.read()).hexdigest(), live["evidence"][first_evidence])
                 with self.assertRaises(urllib.error.HTTPError) as missing:
                     urllib.request.urlopen(url + ".acceptance/secret", timeout=5)
                 self.assertEqual(missing.exception.code, 404)

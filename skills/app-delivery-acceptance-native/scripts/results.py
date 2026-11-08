@@ -44,7 +44,7 @@ def live_attempt(project, run):
         return False
 
 
-def view(project, identifier, selected=None):
+def view(project, identifier, selected=None, *, dashboard=False):
     manifest = project.manifest(identifier)
     versions = project.versions(identifier)
     if not versions:
@@ -65,12 +65,33 @@ def view(project, identifier, selected=None):
     execution.sort(key=lambda item: (item[0].get("recorded_at", ""), item[0]["request_id"]))
     opinions = [review for review, _ in attempts(project, identifier, "review") if review["status"] == "reviewed"]
     matched = [item for item, _ in attempts(project, identifier, "match") if item["status"] == "matched"]
+    debugged = attempts(project, identifier, "debug") if dashboard else ()
     for scene, definition in scenes.items():
         fresh_cases, history, checklist, expected = {}, [], {}, set()
+        case_design, current_runs = {}, {}
         for match in matched:
             if match["scene"] == scene and match["definitions_sha256"] == current_sha:
                 expected = set(match["cases"])
                 checklist = match["obligations"]
+                if dashboard:
+                    case_design = dict(match["cases"])
+        if dashboard:
+            for candidate, sha in reversed(debugged):
+                if (
+                    candidate.get("scene") != scene or candidate["status"] != "debugged"
+                    or candidate["definitions_sha256"] != current_sha or scene in invalidated
+                    or not live_attempt(project, candidate) or not intact(project, candidate["artifacts"])
+                ):
+                    continue
+                review = next((item for item in reversed(opinions)
+                               if item["target_operation"] == "debug" and item["target_sha256"] == sha
+                               and intact(project, item["artifacts"])), None)
+                for case, details in candidate["cases"].items():
+                    case_design[case] = {**case_design.get(case, {}), **details, "debug": candidate["request_id"],
+                                         "design_review": review["judgments"][case] if review else None}
+                expected.update(candidate["cases"])
+                checklist = candidate.get("obligations") or checklist
+                break
         for run, sha in execution:
             if run.get("scene") != scene or run["status"] not in {"executed", "observed", "imported"}:
                 continue
@@ -121,6 +142,8 @@ def view(project, identifier, selected=None):
             })
             if applicable:
                 fresh_cases.update(run_cases)
+                if dashboard:
+                    current_runs.update(dict.fromkeys(run_cases, run["request_id"]))
                 expected.update(run.get("designed_case_ids", run_cases))
                 checklist = run.get("obligations") or checklist
         for case in expected - fresh_cases.keys():
@@ -135,6 +158,8 @@ def view(project, identifier, selected=None):
             "definition": definition, "cases": fresh_cases, "history": history, "missing_obligations": missing,
             "status": "passed" if complete else "definition_changed" if scene in invalidated else "not_fully_validated",
         }
+        if dashboard:
+            result["scenes"][scene].update(case_design=case_design, current_runs=current_runs)
     return result
 
 
@@ -260,36 +285,48 @@ def export_report(project, identifier, request):
     }
 
 
+DASHBOARD_ASSETS = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
+    "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
+}
+
+
 def serve(project, identifier, port=0):
     project.manifest(identifier)
+    assets = Path(__file__).resolve().with_name("dashboard")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             try:
-                snapshot = view(project, identifier)
-                files = {name: f"evidence/{digest(name.encode())}" for name in snapshot["evidence"]}
-                if self.path == "/":
-                    response = render(snapshot, files).encode("utf-8")
-                    content = "text/html; charset=utf-8"
-                elif self.path == "/snapshot.json":
-                    response = encoded(snapshot)
-                    content = "application/json; charset=utf-8"
+                if self.path in DASHBOARD_ASSETS:
+                    name, content = DASHBOARD_ASSETS[self.path]
+                    response = (assets / name).read_bytes()
                 else:
-                    original = next((name for name, route in files.items() if "/" + route == self.path), None)
-                    if original is None:
-                        self.send_error(404)
-                        return
-                    response = project.path(original).read_bytes()
-                    if digest(response) != snapshot["evidence"][original]:
-                        self.send_error(409)
-                        return
-                    content = mimetypes.guess_type(original)[0]
-                    if content not in {"image/png", "image/jpeg", "image/webp", "application/json"}:
-                        content = "text/plain; charset=utf-8"
+                    snapshot = view(project, identifier, dashboard=True)
+                    if self.path == "/snapshot.json":
+                        snapshot["evidence_urls"] = {name: f"/evidence/{digest(name.encode())}" for name in snapshot["evidence"]}
+                        response = encoded(snapshot)
+                        content = "application/json; charset=utf-8"
+                    else:
+                        original = next((name for name in snapshot["evidence"]
+                                         if self.path == f"/evidence/{digest(name.encode())}"), None)
+                        if original is None:
+                            self.send_error(404)
+                            return
+                        response = project.path(original).read_bytes()
+                        if digest(response) != snapshot["evidence"][original]:
+                            self.send_error(409)
+                            return
+                        content = mimetypes.guess_type(original)[0]
+                        if content not in {"image/png", "image/jpeg", "image/webp", "application/json"}:
+                            content = "text/plain; charset=utf-8"
                 self.send_response(200)
                 self.send_header("Content-Type", content)
                 self.send_header("Content-Length", str(len(response)))
-                self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Security-Policy",
+                                 "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(response)
