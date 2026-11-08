@@ -234,7 +234,6 @@ class OperationsTests(unittest.TestCase):
         with zipfile.ZipFile(self.root / archive["archive"]) as bundle:
             self.assertEqual(bundle.read(f"files/{source}"), original)
 
-    @unittest.skipUnless(os.name == "posix", "POSIX process checks")
     def test_reconcile_committed_evidence_without_rerunning_a_command(self):
         ready = self.runtime()
         result_file = self.root / ready["record"]
@@ -247,10 +246,14 @@ class OperationsTests(unittest.TestCase):
         (lock / "owner.json").write_text(json.dumps({"pid": previous.pid, "attempt": [self.id, "runtime", "runtime"]}))
         payload = {"operation": "runtime", "attempt": "runtime"}
         self.assertEqual(self.run_json("lifecycle.py", ["recover", self.id], payload, 2)["status"], "unreconciled")
-        result = self.run_json("lifecycle.py", ["recover", self.id], {
+        reconcile = {
             **payload, "action": "reconcile",
             "external_effects": {"status": "none_proved", "basis": "Original fixture process exited and artifacts were verified."},
-        }, 0)
+        }
+        (lock / "owner.json").write_text(json.dumps({"pid": os.getpid(), "attempt": [self.id, "runtime", "runtime"]}))
+        self.assertIn("active", self.run_json("lifecycle.py", ["recover", self.id], reconcile, 2)["reason"])
+        (lock / "owner.json").write_text(json.dumps({"pid": previous.pid, "attempt": [self.id, "runtime", "runtime"]}))
+        result = self.run_json("lifecycle.py", ["recover", self.id], reconcile, 0)
         self.assertEqual(result["status"], "reconciled")
         self.assertEqual(result_file.read_bytes(), original)
         self.assertFalse(lock.exists())

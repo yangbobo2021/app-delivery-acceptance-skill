@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -396,21 +397,23 @@ def recover(project, identifier, request):
     if effects["status"] not in {"none_proved", "reconciled"}:
         raise Blocked("recovery requires an explicit assessment of external effects")
     require_text(effects["basis"], "verified effects assessment")
-    if os.name != "posix":
-        raise Blocked("automatic interrupted-process recovery is currently verified only on POSIX")
     guard = project.path(".acceptance-local", "native-v1", "recovery.lock")
     guard.mkdir()
     try:
+        windows = windows_processes() if os.name == "nt" else None
         lock = project.path(".acceptance-local", "native-v1", "writer.lock")
         owner = None
         if lock.exists():
             owner = read_json(lock / "owner.json")
             if owner["attempt"] != [identifier, section, key]:
                 raise Blocked("writer lock belongs to another attempt")
-            verify_process_finished(owner["pid"], os.kill)
+            verify_process_finished(owner["pid"], os.kill, windows)
         for location in folder.rglob("*.process.json"):
             process = read_json(project.path(project_ref(project, location)))
-            verify_process_finished(process["group"], os.killpg)
+            if windows is None:
+                verify_process_finished(process["group"], os.killpg)
+            else:
+                verify_process_finished(process["pid"], None, windows)
         if action == "reconcile":
             outcome = result_file if result_file.exists() else folder / "pending-outcome.json"
             data = read_json(outcome)
@@ -438,9 +441,27 @@ def recover(project, identifier, request):
         guard.rmdir()
 
 
-def verify_process_finished(pid, check):
+def windows_processes():
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+         "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress"],
+        capture_output=True, text=True, timeout=20,
+    )
+    if result.returncode:
+        raise Blocked("could not verify Windows process identities")
+    processes = json.loads(result.stdout)
+    if not isinstance(processes, list) or not processes:
+        raise Blocked("Windows process information is unavailable")
+    return {(item["ProcessId"], item["ParentProcessId"]) for item in processes}
+
+
+def verify_process_finished(pid, check, windows=None):
     if type(pid) is not int or pid <= 0:
         raise Blocked("missing original process identity")
+    if windows is not None:
+        if any(pid in (actual, parent) for actual, parent in windows):
+            raise Blocked("original Windows process or descendant is still active")
+        return
     try:
         check(pid, 0)
     except ProcessLookupError:
@@ -468,7 +489,7 @@ def main():
     args = parser.parse_args()
     try:
         result = DIRECT[args.operation](Project(args.root), args.id, json.load(sys.stdin))
-    except (Blocked, KeyError, TypeError, ValueError, OSError, zipfile.BadZipFile) as error:
+    except (Blocked, KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         result = {"status": "blocked", "reason": str(error)}
     print(json.dumps(result, ensure_ascii=False))
     return 2 if result["status"] in {"blocked", "unreconciled"} else 0

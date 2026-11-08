@@ -111,6 +111,16 @@ def terminate(process):
     try:
         if os.name == "posix":
             os.killpg(process.pid, signal.SIGKILL)
+        elif os.name == "nt" and process.poll() is None:
+            try:
+                killed = subprocess.run(
+                    ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10,
+                )
+                needs_kill = killed.returncode != 0
+            except (OSError, subprocess.SubprocessError):
+                needs_kill = True
+            if needs_kill and process.poll() is None:
+                process.kill()
         else:
             process.kill()
     except ProcessLookupError:
