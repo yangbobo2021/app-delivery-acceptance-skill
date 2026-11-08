@@ -79,7 +79,7 @@ def review_facts(records, project, thread):
                 item = event.get("payload", {})
                 if event.get("type") == "response_item" and item.get("type") in {"function_call", "custom_tool_call"}:
                     call = item.get("input") or item.get("arguments") or ""
-                    if receipt.name in call and re.search(r"cat\s*>|write_(?:text|bytes)|apply_patch|\bcp\s", call):
+                    if receipt.name in call and re.search(r"cat\s*>|write_(?:text|bytes)|\.open\(|\*\*\* (?:Add|Update) File|apply_patch|\bcp\s", call):
                         observed_writer = True
                         break
         facts.append({
