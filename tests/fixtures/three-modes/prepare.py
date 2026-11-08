@@ -50,7 +50,7 @@ from pathlib import Path
 
 config = Path(".local-settings")
 if sys.argv[1:] == ["--init"]:
-    config.write_text("development\n")
+    config.write_text("development\\n")
 if not config.exists():
     sys.exit("Missing .local-settings; follow README")
 from price import total
