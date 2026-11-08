@@ -40,14 +40,14 @@ def coverage_policy(project, identifier, request):
     return ready
 
 
-def run_cases(project, request, path, cases, coverage, *, cwd="."):
+def run_cases(project, request, path, cases, coverage, *, cwd=".", extra_env=None):
     results = {}
     for identifier, case in cases.items():
         command = argv(case["command"])
         folder = path / identifier
         output = folder / "attachments"
         output.mkdir(parents=True)
-        environment = {"ACCEPTANCE_EVIDENCE_DIR": str(output)}
+        environment = {**(extra_env or {}), "ACCEPTANCE_EVIDENCE_DIR": str(output)}
         limit = request.get("timeout", 60)
         measured = {"status": "off"}
         if coverage and "adapter" in coverage:

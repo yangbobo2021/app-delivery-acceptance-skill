@@ -1,7 +1,14 @@
 """Record a reviewed red test and rerun exactly that candidate on changed product."""
+import os
+
 from casework import bound_attempt, coverage_policy, evidence_files, run_cases
 from evidence import argv, capture, file_bindings, upstream, verify_bindings
 from records import Blocked, atomic_write, token
+
+
+def fresh_python_environment(path):
+    # The interpreter can otherwise reuse a same-size, same-second prior source revision.
+    return {"PYTHONPYCACHEPREFIX": str(path / "python-cache"), "PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def run(project, request, path, runtime, coverage, product, cases, test_bindings):
@@ -11,7 +18,7 @@ def run(project, request, path, runtime, coverage, product, cases, test_bindings
         raise Blocked("runtime and coverage must bind the same checkout")
     for name in test_bindings:
         atomic_write(path / "source" / name, project.path(name).read_bytes())
-    results = run_cases(project, request, path, cases, coverage, cwd=cwd)
+    results = run_cases(project, request, path, cases, coverage, cwd=cwd, extra_env=fresh_python_environment(path))
     verify_bindings(project, bindings)
     return {
         "bindings": bindings, "product_bindings": product, "test_bindings": test_bindings,
@@ -61,7 +68,7 @@ def green(project, identifier, request, definitions, path):
         raise Blocked("product files have not changed since red")
     result = run(project, request, path, runtime, coverage, product, original["cases"], original["test_bindings"])
     regression = capture(project, argv(request["regression_command"]), path, "regression",
-                         request.get("timeout", 60), cwd=result["cwd"])
+                         request.get("timeout", 60), {**os.environ, **fresh_python_environment(path)}, cwd=result["cwd"])
     verify_bindings(project, result["bindings"])
     passed = regression["exit_code"] == 0 and all(
         row["execution"] and row["execution"]["exit_code"] == 0 and row["coverage"]["status"] != "unavailable"

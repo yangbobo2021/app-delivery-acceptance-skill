@@ -84,6 +84,69 @@ class OperationsTests(unittest.TestCase):
             "command": command or [sys.executable, "tools/smoke.py"],
         }, expected_code)
 
+    def review_attempt(self, attempt, key, decision):
+        return self.operation("review", {
+            "request_id": key, "scene": "SC1",
+            "target_operation": attempt["operation"], "target": attempt["request_id"],
+            "target_sha256": hashlib.sha256((self.root / attempt["record"]).read_bytes()).hexdigest(),
+            "reviewer_session": "separate-fixture-reviewer",
+            "raw_review": json.dumps({"cases": {"TC-verified": {"reason": "fixture result", **decision}}}),
+        })
+
+    def test_valid_design_with_a_product_defect_runs_formally_and_reports_failure(self):
+        self.runtime()
+        match = self.operation("match", {
+            "request_id": "match", "scene": "SC1", "search_scope": "none",
+            "inspected": {}, "cases": [],
+            "obligations": [{"id": "reject", "quote": "第二次响应 JSON status 必须为 409"}],
+        })
+        path = "tests/check_s1.py"
+        (self.root / path).write_text("raise SystemExit(1)\n", encoding="utf-8")
+        debug = self.operation("debug", {
+            "request_id": "debug", "scene": "SC1", "match": match["request_id"], "runtime": "runtime",
+            "coverage_policy": "off", "coverage_basis": "isolated fixture",
+            "cases": {"TC-verified": {"command": [sys.executable, path], "files": [path]}},
+        })
+        legacy = self.review_attempt(debug, "legacy", {"status": "product_defect"})
+        form = {"request_id": "formal", "scene": "SC1", "selected_case_ids": ["TC-verified"]}
+        self.operation("execute", {**form, "design_review": legacy["request_id"]}, 2)
+        design = self.review_attempt(debug, "design", {"status": "product_defect", "design_status": "valid"})
+        result = self.operation("execute", {**form, "request_id": "formal-valid", "design_review": design["request_id"]})
+        self.assertEqual(result["results"]["TC-verified"]["execution"]["exit_code"], 1)
+        self.review_attempt(result, "execution-review", {"status": "product_defect"})
+        view = self.run_json("results.py", ["view", self.id], None, 0)
+        self.assertEqual(view["scenes"]["SC1"]["cases"]["TC-verified"]["status"], "product_defect")
+
+    def test_tdd_requires_reviewed_red_and_preserves_test_bytes_on_green(self):
+        product = self.root / "product.py"
+        test = self.root / "check_new.py"
+        product.write_text("VALUE = 1\n", encoding="utf-8")
+        test.write_text("from product import VALUE\nassert VALUE == 2, VALUE\n", encoding="utf-8")
+        policy = {"coverage_policy": "off", "coverage_basis": "isolated fixture"}
+        probe = {"files": ["product.py"], "command": [sys.executable, "-c", "import product"]}
+        self.operation("runtime", {"request_id": "baseline", **probe})
+        red = self.operation("tdd-red", {
+            "request_id": "red", "scene": "SC1", "runtime": "baseline", "case_id": "TC-verified",
+            "product_files": ["product.py"], "test_files": ["check_new.py"],
+            "command": [sys.executable, "check_new.py"], **policy,
+        })
+        self.assertEqual(red["results"]["TC-verified"]["execution"]["exit_code"], 1)
+        self.review_attempt(red, "red-review", {"status": "expected_failure"})
+        product.write_text("VALUE = 2\n", encoding="utf-8")
+        self.operation("runtime", {"request_id": "changed", **probe})
+        request = {"scene": "SC1", "runtime": "changed", "red_review": "red-review",
+                   "regression_command": [sys.executable, "check_new.py"], **policy}
+        self.operation("tdd-green", {**request, "request_id": "missing-review", "red_review": "absent"}, 2)
+        original = test.read_bytes()
+        test.write_text("assert True\n", encoding="utf-8")
+        self.operation("tdd-green", {**request, "request_id": "modified-test"}, 2)
+        test.write_bytes(original)
+        green = self.operation("tdd-green", {**request, "request_id": "green"})
+        self.assertEqual(green["test_bindings"], red["test_bindings"])
+        self.assertEqual(green["cases"], red["cases"])
+        self.assertEqual(green["regression"]["exit_code"], 0)
+        self.review_attempt(green, "green-review", {"status": "passed"})
+
     def test_runtime_requires_actual_exit_and_reuses_valid_receipt(self):
         runtime = self.runtime()
         self.assertEqual(runtime["status"], "ready")
