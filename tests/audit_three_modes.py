@@ -63,7 +63,7 @@ def review_facts(records, project, thread):
                 continue
             spawn = source.get("subagent", {}).get("thread_spawn", {})
             if spawn.get("parent_thread_id") == thread:
-                child[meta["id"]] = child[spawn["agent_path"]] = (meta["id"], spawn["agent_path"])
+                child[meta["id"]] = child[spawn["agent_path"]] = (meta["id"], spawn["agent_path"], path)
     facts = []
     for row in records:
         if row["operation"] != "review" or row["status"] != "reviewed":
@@ -72,12 +72,22 @@ def review_facts(records, project, thread):
         request = load(path.with_name("request.json"))
         target = path.parents[2] / row["target_operation"] / row["target"] / "result.json"
         receipt = project / request["review_file"] if "review_file" in request else None
-        session, agent = child.get(row["reviewer_session"], (None, None))
+        session, agent, rollout = child.get(row["reviewer_session"], (None, None, None))
+        observed_writer = False
+        if receipt and rollout:
+            for event in events(rollout):
+                item = event.get("payload", {})
+                if event.get("type") == "response_item" and item.get("type") in {"function_call", "custom_tool_call"}:
+                    call = item.get("input") or item.get("arguments") or ""
+                    if receipt.name in call and re.search(r"cat\s*>|write_(?:text|bytes)|apply_patch|\bcp\s", call):
+                        observed_writer = True
+                        break
         facts.append({
             "request": row["request_id"], "operation": row["target_operation"], "target": row["target"],
             "case_verdicts": row["judgments"], "native_child": session,
             "fork_turns": calls.get(agent.split("/")[-1]) if agent else None,
             "exact_target": digest(target) == row["target_sha256"],
+            "child_write_seen": observed_writer,
             "raw_bytes": bool(receipt and receipt.is_file() and digest(receipt) == digest(project / row["reviewer_response"])),
         })
     return facts
@@ -191,6 +201,8 @@ def capture(folder, case):
             check(not greens and (project / "price.py").read_bytes() == base, "test-only path modified product or ran green")
             check(all(row[3:].startswith("tests/") for row in changed), "test-only path edited an unauthorized file")
         else:
+            check(all(row[3:] == "price.py" or row[3:].startswith("tests/") for row in changed),
+                  "TDD modified files outside the authorized product and test scope")
             check(any(g["red"] == r["request_id"] and g["test_bindings"] == r["test_bindings"]
                       and g["cases"] == r["cases"] and g["regression"]["exit_code"] == 0
                       and review_of("tdd-green", g, ["passed"]) for g in greens for r in red_ok),
