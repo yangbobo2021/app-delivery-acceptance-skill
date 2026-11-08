@@ -7,8 +7,11 @@ import sys
 import uuid
 from pathlib import Path
 
-from coverage_python import measure_python
+from casework import debug, execute, history, manual, review
+from coverage_adapter import project_measure
+from coverage_python import measure_python, recompute
 from evidence import argv, capture, file_bindings, project_ref, recorded, upstream, verify_bindings
+from lifecycle import RECORDED
 from records import Blocked, Project, acceptance_id, digest, require_text, token
 
 
@@ -65,14 +68,38 @@ def match(project, identifier, request, definitions, path):
 
 
 def runtime(project, identifier, request, definitions, path):
-    bindings = file_bindings(project, request["files"])
-    run = capture(project, request["command"], path, "smoke", request.get("timeout", 60))
+    rebind = upstream(project, identifier, request, "rebind", "rebind", "bound") if request.get("rebind") else None
+    cwd = rebind.get("cwd", ".") if rebind else "."
+    bindings = {**(rebind["bindings"] if rebind else {}), **file_bindings(project, request["files"])}
+    run = capture(project, request["command"], path, "smoke", request.get("timeout", 60), cwd=cwd)
     verify_bindings(project, bindings)
-    return {"status": "ready" if run["exit_code"] == 0 else "blocked", "bindings": bindings, "smoke": run}
+    return {
+        "status": "ready" if run["exit_code"] == 0 else "blocked",
+        "bindings": bindings, "artifacts": run["output"], "smoke": run, "cwd": cwd,
+        "revision": rebind["revision"] if rebind else None,
+    }
 
 
 def coverage(project, identifier, request, definitions, path):
     preparation = upstream(project, identifier, request, "runtime", "runtime", "ready")
+    cwd = preparation.get("cwd", ".")
+    if "adapter" in request:
+        adapter = request["adapter"]
+        observable = request["observe"]
+        bindings = {**preparation["bindings"], **file_bindings(project, adapter["files"])}
+        if observable["path"] not in bindings:
+            raise Blocked("product probe must point to a bound project file")
+        result, commands = project_measure(
+            project, path / "coverage", request["command"], adapter, observable, request.get("timeout", 60), cwd=cwd,
+        )
+        verify_bindings(project, bindings)
+        ready = result is not None and commands["run"]["exit_code"] == 0
+        return {
+            "status": "ready" if ready else "blocked",
+            "reason": None if ready else "project coverage tool did not verify actual product execution",
+            "bindings": bindings, "commands": commands, "observe": observable, "adapter": adapter, "cwd": cwd,
+            **({"coverage_report": result["path"], "coverage_sha256": result["sha256"], "tool_version": result["tool"]} if result else {}),
+        }
     roots = request["source_roots"]
     if not isinstance(roots, list) or not roots:
         raise Blocked("declare project source directories")
@@ -84,13 +111,14 @@ def coverage(project, identifier, request, definitions, path):
     command = argv(request["command"])
     if len(command) < 2 or Path(command[0]).name.split(".")[0] not in {"python", "python3"}:
         raise Blocked("this Python coverage adapter requires python <script> [args]")
-    bindings = {**preparation["bindings"], **file_bindings(project, sorted(set(files + [command[1]])))}
-    report, actions = measure_python(project, path / "coverage", command[0], command[1], command[2:], roots, request.get("timeout", 60))
+    probe_file = project_ref(project, project.path(cwd, command[1]))
+    bindings = {**preparation["bindings"], **file_bindings(project, sorted(set(files + [probe_file])))}
+    report, actions = measure_python(project, path / "coverage", command[0], command[1], command[2:], roots, request.get("timeout", 60), cwd=cwd)
     verify_bindings(project, bindings)
     if report is None:
         return {"status": "blocked", "reason": "coverage.py could not produce a native report", "commands": actions, "bindings": bindings}
     observed = next(
-        (detail for name, detail in report["files"].items() if (project.root / name).resolve() == product),
+        (detail for name, detail in report["files"].items() if (project.path(cwd) / name).resolve() == product),
         {},
     )
     ready = (
@@ -101,13 +129,18 @@ def coverage(project, identifier, request, definitions, path):
         "status": "ready" if ready else "blocked",
         "reason": None if ready else "probe did not complete successfully and observe the required product line",
         "bindings": bindings, "commands": actions, "observe": observable, "source_roots": roots,
-        "python": command[0], "tool_version": report["meta"]["version"], "probe": command,
+        "python": command[0], "tool_version": report["meta"]["version"], "probe": command, "cwd": cwd,
         "coverage_report": project_ref(project, path / "coverage" / "coverage.json"),
         "coverage_sha256": digest((path / "coverage" / "coverage.json").read_bytes()),
     }
 
 
-OPERATIONS = {"match": match, "runtime": runtime, "coverage": coverage}
+OPERATIONS = {
+    "match": match, "runtime": runtime, "coverage": coverage,
+    "debug": debug, "execute": execute, "review": review, "history": history,
+    "manual": manual, "coverage-recompute": recompute,
+    **RECORDED,
+}
 
 
 def main():

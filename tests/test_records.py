@@ -186,7 +186,12 @@ class RecordsTests(unittest.TestCase):
 
     def test_symlink_storage_and_source_traversal_block(self):
         with tempfile.TemporaryDirectory() as outside:
-            (self.root / ".acceptance-local").symlink_to(outside, target_is_directory=True)
+            try:
+                (self.root / ".acceptance-local").symlink_to(outside, target_is_directory=True)
+            except OSError as error:
+                if sys.platform == "win32" and getattr(error, "winerror", None) == 1314:
+                    self.skipTest("Windows runner has no symlink privilege")
+                raise
             with self.assertRaisesRegex(records.Blocked, "linked project path"):
                 self.create()
             self.assertEqual(list(Path(outside).iterdir()), [])

@@ -26,9 +26,9 @@ def tool(project, script, *args, payload=None):
     return json.loads(process.stdout)
 
 
-def setup(output, case):
+def setup(output, case, fixture="C2"):
     project = output / case
-    prepare_booking(project, "C2")
+    prepare_booking(project, fixture)
     installed = project / ".agents" / "skills" / SKILL.name
     shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
     tool(project, "records", "create", IDENTIFIER, "--request", "冻结 SC1 合成验收。", "--reference", "fixture:user")

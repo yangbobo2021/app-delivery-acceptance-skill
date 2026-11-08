@@ -96,7 +96,7 @@ class Project:
         return acceptance_id(read_json(pointer)["acceptance_id"]) if pointer.exists() else None
 
     @contextmanager
-    def writer(self):
+    def writer(self, attempt=None):
         if self.git_root is not None:
             result = subprocess.run(
                 ["git", "check-ignore", "--", f".acceptance-local/{NAMESPACE}/current.json"],
@@ -105,14 +105,21 @@ class Project:
             if result.returncode != 0:
                 raise Blocked(f".acceptance-local/{NAMESPACE}/ must be Git-ignored before writing")
         lock = self.path(".acceptance-local", NAMESPACE, "writer.lock")
+        recovery = self.path(".acceptance-local", NAMESPACE, "recovery.lock")
         lock.parent.mkdir(parents=True, exist_ok=True)
+        if recovery.exists():
+            raise Blocked("acceptance recovery is active")
         try:
             lock.mkdir()
         except FileExistsError as error:
             raise Blocked("acceptance storage is busy or has an unreconciled interrupted write") from error
         try:
+            if recovery.exists():
+                raise Blocked("acceptance recovery is active")
+            atomic_write(lock / "owner.json", encoded({"pid": os.getpid(), "attempt": attempt}))
             yield
         finally:
+            (lock / "owner.json").unlink(missing_ok=True)
             lock.rmdir()
 
     def manifest(self, identifier):

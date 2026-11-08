@@ -2,13 +2,15 @@
 
 项目目标是在 Codex 中按用户的验收目标冻结依据、匹配或补齐用例、执行指定范围、独立复审并展示证据。主 Skill 根据实际结果协调各能力，通过 Codex 原生 PLAN 展示进度、分支与返修。
 
-当前是**定义与存储候选版**，支持只创建、保存口述需求、按文件选段冻结需求和场景、查看当前验收和读取旧版定义。原版 0.4.17 的固定提交是功能对照。后续用例、执行、复审和展示能力按阶段交付。
+当前是**交付验收候选版**。原版 0.4.17 的固定提交是功能对照。新版支持创建与冻结、匹配及补齐用例、测试和覆盖准备、真实执行、独立复审、返修及结果展示。核心链路在 Codex 中用 LUNA 和 SOL 验证。生命周期与兼容范围见阶段验收。
 
 - [架构与数据约定](docs/design.md)
 - [功能对照清单](docs/parity.md)
 - [实施顺序与阶段验收](docs/delivery-plan.md)
 - [31 个入口的对照任务和验收结果约定](tests/baseline/behaviors.json)
 - [定义与存储阶段验证结果](docs/stage-1-results.md)
+- [匹配与环境准备阶段验证结果](docs/stage-2-results.md)
+- [执行、报告与生命周期验证结果](docs/stage-3-to-6-results.md)
 
 ## 试用当前候选版
 
@@ -28,6 +30,8 @@ $app-delivery-acceptance-native 在 AT-demo 冻结 R1。需求原话是「预约
 
 新版写入 `.acceptance/native-v1/` 和 `.acceptance-local/native-v1/`。文件冻结按实际选段、来源摘要和当前版本核对后发布。用户明确授权的定义修改创建新版本并保留旧版。
 
+从已冻结场景继续时，可提出「只匹配 SC1 的已有用例，交付缺口」或「为 SC1 补齐用例、正式执行并独立复审」。按项目约定准备实际测试和覆盖工具，Python 项目可使用 coverage.py，其他项目可配置现有采集和验证入口。需要实时查看时可以打开本机只读查看器，也可以导出 HTML 和原始证据快照。
+
 ## 验证
 
 ```sh
@@ -40,4 +44,10 @@ python3 -m unittest discover -s tests -v
 
 ```sh
 python3 tests/e2e_definitions.py --model gpt-6-luna
+```
+
+已安装支持子进程采集的 coverage.py 时，可进一步验证完整业务：
+
+```sh
+python3 tests/e2e_workflow.py --case full --model gpt-6-luna --coverage-python /path/to/python
 ```

@@ -30,15 +30,17 @@ def protected(project):
     }
 
 
-def codex(project, skill, prompt, model, evidence):
+def codex(project, skill, prompt, model, evidence, *, timeout=150, review=False, followup=None):
     command = [
         "codex", "app-server", "--stdio", "-c", "mcp_servers={}",
         "-c", "features.apps=false", "-c", "features.plugins=false", "-c", "features.hooks=false",
         "-c", 'web_search="disabled"',
     ]
+    if review:
+        command.extend(["-c", "features.multi_agent=true", "-c", f"agents.default_subagent_model={json.dumps(model)}"])
     with evidence.with_suffix(".stderr").open("w", encoding="utf-8") as stderr, evidence.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(command, cwd=project, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True)
-        timer = Timer(150, process.terminate)
+        timer = Timer(timeout, process.terminate)
         timer.start()
 
         def send(message):
@@ -68,9 +70,10 @@ def codex(project, skill, prompt, model, evidence):
             thread = request(3, "thread/start", {
                 "cwd": str(project), "model": model, "approvalPolicy": "never", "sandbox": "workspace-write",
             })["thread"]["id"]
+            skill_input = {"type": "skill", "name": SKILL.name, "path": str(skill)}
             request(4, "turn/start", {"threadId": thread, "input": [
                 {"type": "text", "text": prompt, "text_elements": []},
-                {"type": "skill", "name": SKILL.name, "path": str(skill)},
+                skill_input,
             ]})
             plans, commands, responses = [], [], []
             for event in stream:
@@ -84,9 +87,19 @@ def codex(project, skill, prompt, model, evidence):
                     commands.append(item)
                 elif method == "item/completed" and item.get("type") == "agentMessage":
                     responses.append(item["text"])
+                elif method == "item/completed" and item.get("type") == "collabAgentToolCall":
+                    pass
                 elif method == "turn/completed":
                     assert params["turn"]["status"] == "completed", params["turn"]["status"]
-                    break
+                    if followup is None:
+                        break
+                    text = followup(responses[-1])
+                    followup = None
+                    send({"id": 5, "method": "turn/start", "params": {"threadId": thread, "input": [
+                        {"type": "text", "text": text, "text_elements": []}, skill_input,
+                    ]}})
+                    log.write(json.dumps(event, ensure_ascii=False) + "\n")
+                    log.flush()
                 else:
                     continue
                 log.write(json.dumps(event, ensure_ascii=False) + "\n")

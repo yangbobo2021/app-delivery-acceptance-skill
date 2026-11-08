@@ -63,19 +63,18 @@ tests/
       <AT-ID>/
         manifest.json
         definitions/<定义版本>/
-        cases/<用例集版本>/
-        records/<run-id>/       # 结果索引、复审引用、结论和报告快照
+        cases/<scene-id>/       # 匹配与调试索引
+        records/<scene-id>/     # 执行与复审索引
+        records/report-<id>/    # 报告与选定证据快照
   .acceptance-local/           # 检查实际 Git 忽略规则
     native-v1/
       current.json
       <AT-ID>/
         workspace/             # 项目需要隔离写入时使用
-        runs/<run-id>/
-          <scene-id>/<tc-id>/<attempt-id>/
-            execution.json
-            evidence/
-            coverage/
-            review/
+        <operation>/<request-id>/
+          request.json
+          result.json
+          <tc-id>/              # 执行日志、附件和原生覆盖资料
 ```
 
 定义保留原文、来源、ID 与版本。用例集保留稳定 TC ID、关联义务、源码引用、调试和设计评估。一次正式执行以任务、场景、用例、执行尝试及实际产品和用例版本定位。复审绑定对应执行与证据，修订写入新版本或新尝试。保存 Reviewer 原答，引用或索引可补录，原答保持原样。PLAN 是当前对话中的进度视图。恢复时，从已保存的业务产物、实际进程和当前授权重建待办。
