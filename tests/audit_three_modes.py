@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
 
 from e2e_three_modes import MATRIX
@@ -118,7 +119,23 @@ def capture(folder, case):
                    and set(v["status"] for v in f["case_verdicts"].values()) == set(verdicts) for f in facts)
 
     def business_commands():
-        return [row for row in commands if re.search(r"python(?:3(?:\.\d+)?)?\s+(?:\./)?(?:checks\.py|stock_(?:check|restart)\.py)(?:\s|['\"]|$)", row["command"])]
+        executable = re.compile(r"(?:^|[;&])\s*(?:\S+=\S+\s+)*python(?:3(?:\.\d+)?)?\s+(?:\./)?"
+                                r"(?:checks\.py|stock_(?:check|restart)\.py)(?:\s|$)", re.MULTILINE)
+        observed = []
+        for row in commands:
+            shell = shlex.split(row["command"])[-1]
+            statements, until = [], None
+            for line in shell.splitlines():
+                if until:
+                    if line.strip() == until:
+                        until = None
+                    continue
+                marker = re.search(r"<<-?\s*['\"]?(\w+)", line)
+                until = marker.group(1) if marker else None
+                statements.append(line)
+            if executable.search("\n".join(statements)):
+                observed.append(row)
+        return observed
 
     changed = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=project, text=True).splitlines()
     changed = [row for row in changed if not row[3:].startswith(".acceptance/")]
@@ -208,7 +225,7 @@ def capture(folder, case):
                 existing = [project / p for p in row.get("evidence", []) if isinstance(p, str)]
                 check(any(p.is_file() and key in p.read_text(errors="replace") for p in existing),
                       f"{key} raw new evidence was not linked")
-                check(row.get("exit_code", (row.get("execution") or {}).get("exit_code")) == expected_code, f"{key} recorded wrong exit code")
+                check(row.get("exit_code", (row.get("execution") or row.get("run") or {}).get("exit_code")) == expected_code, f"{key} recorded wrong exit code")
         else:
             check(not business, "read-only inventory executed a check")
     output["status"] = "passed" if not failures else "failed"
