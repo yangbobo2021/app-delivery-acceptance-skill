@@ -6,6 +6,9 @@ const labels = {
   not_executed: "未执行", stale: "旧版本", evidence_missing: "证据缺失", historical: "历史记录",
   definition_conflict: "定义冲突", insufficient_evidence: "证据不足", skipped: "跳过",
   measured: "已采集", off: "关闭", unavailable: "未取得覆盖率", unknown: "未核对",
+  expected_failure: "已确认预期红灯", tdd_in_progress: "TDD 进行中", tdd_verified: "TDD 绿灯已复审",
+  verified: "已验证", failed: "失败", recheck: "待复验", untested: "未验证", unconfirmed: "待确认",
+  source_missing: "依据缺失", conflict: "依据冲突", blocked: "受阻",
 };
 const get = id => document.getElementById(id);
 const detail = get("detail");
@@ -82,6 +85,7 @@ function readSnapshot(snapshot) {
         const observed = run.cases[caseId];
         const runKey = add(key("run", id, caseId, run.run), {
           label: run.run, kind: "实际执行", title: caseId, status: observed.status, observed,
+          stage: {"tdd-red": "红灯", "tdd-green": "绿灯"}[run.operation],
           version: run.definition_sha256, evidence: observed.evidence,
         });
         link(caseKey, runKey);
@@ -108,7 +112,7 @@ function readSnapshot(snapshot) {
   for (const parent of requirements.values()) {
     if (!connected.has(parent)) groups.push({id: null, parents: [parent], cases: []});
   }
-  return {snapshot, nodes, groups};
+  return {snapshot, nodes, groups, requirements};
 }
 
 function nodeButton(id, name) {
@@ -122,9 +126,9 @@ function nodeText(node) {
   return [node.label, node.title, node.source?.text].filter(Boolean).join(" ").toLowerCase();
 }
 
-function matching(group, query, filter) {
+function matching(group, parent, query, filter) {
   const data = current.nodes;
-  const groupMatches = !query || [...group.parents, group.id].filter(Boolean).some(id => nodeText(data.get(id)).includes(query));
+  const groupMatches = !query || [parent, group.id].filter(Boolean).some(id => nodeText(data.get(id)).includes(query));
   if (!group.cases.length) {
     return groupMatches && (!filter || (filter === "not_executed" && group.id)) ? [] : null;
   }
@@ -142,60 +146,76 @@ function renderTable() {
   const filter = get("filter").value;
   const rows = [];
   const focused = document.activeElement?.dataset.node;
+  const sections = new Map([...current.requirements.values(), null].map(parent => [parent, []]));
   for (const group of current.groups) {
-    const matches = matching(group, query, filter);
-    if (!matches) continue;
-    const tr = element("tr");
-    const cells = Array.from({length: 5}, () => tr.appendChild(element("td")));
-    for (const parent of group.parents) {
-      const node = current.nodes.get(parent);
-      cells[0].appendChild(element("div")).append(nodeButton(parent, node.label), element("p", node.title, "muted"));
+    for (const parent of group.parents.length ? group.parents : [null]) {
+      sections.get(parent).push(group);
     }
-    if (!group.parents.length) cells[0].textContent = "独立场景";
-    if (!group.id) {
-      cells[1].textContent = "尚无关联场景";
-    } else {
-      const node = current.nodes.get(group.id);
-      cells[1].append(nodeButton(group.id, node.label), element("p", node.title, "muted"), status(group.status));
-    }
-    if (!matches.length) {
-      cells[2].textContent = "尚无关联用例";
-      cells[3].append(status("not_executed"));
-      cells[4].textContent = "尚无结论";
-    } else {
-      const lists = cells.slice(2).map(cell => cell.appendChild(element("ul")));
-      const showAll = expanded.has(group.id);
-      for (const item of showAll ? matches : matches.slice(0, 3)) {
-        const test = current.nodes.get(item.id);
-        lists[0].append(element("li"));
-        lists[0].lastElementChild.append(nodeButton(item.id, test.label));
-        if (test.title !== test.label) lists[0].lastElementChild.append(element("p", test.title, "muted"));
-        const run = lists[1].appendChild(element("li"));
-        if (item.execution) {
-          const node = current.nodes.get(item.execution);
-          run.append(nodeButton(item.execution, node.label),
-            element("p", node.observed.exit_code == null ? test.label : test.label + " · 退出 " + node.observed.exit_code, "muted"));
-        }
-        run.append(status(item.outcome));
-        const review = lists[2].appendChild(element("li"));
-        if (item.review) {
-          const opinion = current.nodes.get(item.review);
-          review.append(nodeButton(item.review, labels[opinion.status]), element("p", test.label, "muted"));
-        } else {
-          review.textContent = item.outcome === "pending_review" ? "待独立复审" : "尚无结论";
-        }
-      }
-      if (matches.length > 3) {
-        const toggle = element("button", showAll ? "收起" : "查看全部 " + matches.length + " 项");
-        toggle.type = "button";
-        toggle.dataset.expand = group.id;
-        toggle.setAttribute("aria-expanded", String(showAll));
-        cells[2].append(toggle);
-      }
-    }
-    rows.push(tr);
   }
-  get("count").textContent = "显示 " + rows.length + " / " + current.groups.length + " 组";
+  const total = [...sections.values()].reduce((count, groups) => count + groups.length, 0);
+  for (const [parent, groups] of sections) {
+    const visible = groups.map(group => ({group, matches: matching(group, parent, query, filter)}))
+      .filter(item => item.matches !== null);
+    for (const [index, {group, matches}] of visible.entries()) {
+      const tr = element("tr");
+      const requirement = parent ? current.nodes.get(parent) : null;
+      tr.dataset.requirement = requirement?.label ?? "";
+      if (index === 0) {
+        const cell = requirementCell(tr, visible.length);
+        if (requirement) {
+          cell.append(nodeButton(parent, requirement.label), element("p", requirement.title, "muted"));
+        } else {
+          cell.textContent = "独立场景";
+        }
+      }
+      const [sceneCell, casesCell, runsCell, reviewsCell] = Array.from({length: 4}, () => tr.appendChild(element("td")));
+      if (!group.id) {
+        sceneCell.textContent = "尚无关联场景";
+      } else {
+        const node = current.nodes.get(group.id);
+        sceneCell.append(nodeButton(group.id, node.label), element("p", node.title, "muted"), status(group.status));
+      }
+      if (!matches.length) {
+        casesCell.textContent = "尚无关联用例";
+        runsCell.append(status("not_executed"));
+        reviewsCell.textContent = "尚无结论";
+      } else {
+        const lists = [casesCell, runsCell, reviewsCell].map(cell => cell.appendChild(element("ul")));
+        const showAll = expanded.has(group.id);
+        for (const item of showAll ? matches : matches.slice(0, 3)) {
+          const test = current.nodes.get(item.id);
+          lists[0].append(element("li"));
+          lists[0].lastElementChild.append(nodeButton(item.id, test.label));
+          if (test.title !== test.label) lists[0].lastElementChild.append(element("p", test.title, "muted"));
+          const run = lists[1].appendChild(element("li"));
+          if (item.execution) {
+            const node = current.nodes.get(item.execution);
+            run.append(nodeButton(item.execution, node.stage ? node.stage + " · " + node.label : node.label),
+              element("p", node.observed.exit_code == null ? test.label : test.label + " · 退出 " + node.observed.exit_code, "muted"));
+          }
+          run.append(status(item.outcome));
+          const review = lists[2].appendChild(element("li"));
+          if (item.review) {
+            const opinion = current.nodes.get(item.review);
+            const verdict = opinion.status === "passed" && current.snapshot.mode === "development"
+              ? "绿灯复审通过" : labels[opinion.status];
+            review.append(nodeButton(item.review, verdict), element("p", test.label, "muted"));
+          } else {
+            review.textContent = item.outcome === "pending_review" ? "待独立复审" : "尚无结论";
+          }
+        }
+        if (matches.length > 3) {
+          const toggle = element("button", showAll ? "收起" : "查看全部 " + matches.length + " 项");
+          toggle.type = "button";
+          toggle.dataset.expand = group.id;
+          toggle.setAttribute("aria-expanded", String(showAll));
+          casesCell.append(toggle);
+        }
+      }
+      rows.push(tr);
+    }
+  }
+  get("count").textContent = "显示 " + rows.length + " / " + total + " 行";
   if (!rows.length) {
     const row = element("tr");
     const cell = row.appendChild(element("td", current.snapshot.definitions ? "没有匹配记录" : "尚无冻结定义"));
@@ -219,7 +239,9 @@ function renderSummary() {
     ["通过场景", scenes.filter(group => group.status === "passed").length],
     ["有产品缺陷", scenes.filter(group => group.cases.some(item => item.outcome === "product_defect")).length],
   ];
-  get("summary").replaceChildren(...totals.map(([label, count]) => {
+  const shown = current.snapshot.mode === "development"
+    ? [...totals.slice(0, 4), ["绿灯已复审", scenes.filter(group => group.status === "tdd_verified").length]] : totals;
+  get("summary").replaceChildren(...shown.map(([label, count]) => {
     const card = element("div", undefined, "stat");
     card.append(element("strong", count), element("span", label));
     return card;
@@ -259,6 +281,7 @@ function renderDetail() {
       element("pre", source.text));
       if (source.sha256) body.append(element("p", "SHA-256 " + source.sha256, "muted"));
     }
+    if (node.design?.files) body.append(element("p", node.design.files.join("、")));
     if (node.design?.command) body.append(element("pre", JSON.stringify(node.design.command)));
     if (node.version) body.append(element("p", "执行绑定定义 " + node.version, "muted"));
     for (const name of node.evidence ?? []) {
@@ -304,6 +327,54 @@ function show(id) {
   renderDetail();
 }
 
+function renderInventory() {
+  const inventory = current.snapshot.inventory;
+  const query = get("search").value.trim().toLowerCase();
+  const items = (inventory?.items ?? []).filter(item => JSON.stringify(item).toLowerCase().includes(query));
+  get("count").textContent = inventory ? "显示 " + items.length + " / " + inventory.items.length + " 项" : "等待盘点记录";
+  const groups = new Map();
+  for (const item of items) {
+    const requirement = item.requirement ?? item.id;
+    if (!groups.has(requirement)) groups.set(requirement, []);
+    groups.get(requirement).push(item);
+  }
+  const rows = [];
+  for (const [requirement, group] of groups) {
+    for (const [index, item] of group.entries()) {
+      const row = element("tr");
+      row.dataset.requirement = requirement;
+      if (index === 0) requirementCell(row, group.length).textContent = requirement;
+      const source = row.appendChild(element("td"));
+      if (item.requirement) {
+        source.append(element("strong", item.id), element("p", item.origin ?? "", "muted"));
+      }
+      source.append(element("p", (item.sources ?? []).join("、")));
+      if (item.static_findings?.length) {
+        source.append(element("p", "静态发现 · " + item.static_findings.join("、"), "muted"));
+      }
+      row.append(element("td", (item.evidence ?? []).join("、") || "无适用执行证据"));
+      const state = row.appendChild(element("td"));
+      state.append(status(item.status));
+      if (item.reason) state.append(element("p", item.reason, "muted"));
+      row.append(element("td", item.next));
+      rows.push(row);
+    }
+  }
+  if (!rows.length) {
+    const row = element("tr");
+    row.appendChild(element("td", inventory ? "没有匹配记录" : "尚未生成盘点报告")).colSpan = 5;
+    rows.push(row);
+  }
+  get("rows").replaceChildren(...rows);
+}
+
+function requirementCell(row, count) {
+  row.classList.add("requirement-start");
+  const cell = row.appendChild(element("td", undefined, "requirement"));
+  cell.rowSpan = count;
+  return cell;
+}
+
 async function refresh() {
   if (busy) return;
   busy = true;
@@ -313,15 +384,27 @@ async function refresh() {
     if (!response.ok) throw new Error("HTTP " + response.status);
     const payload = await response.text();
     if (previousPayload !== payload) {
-      current = readSnapshot(JSON.parse(payload));
+      const next = JSON.parse(payload);
+      current = next.mode === "inventory" ? {snapshot: next} : readSnapshot(next);
       previousPayload = payload;
       const snapshot = current.snapshot;
-      document.title = snapshot.acceptance_id + " · 验收追踪";
-      get("acceptance").textContent = snapshot.acceptance_id;
-      get("version").textContent = snapshot.definitions ? "冻结定义 v" + snapshot.definitions.version : "尚未冻结";
-      renderSummary();
-      renderTable();
-      if (detail.open) get("detail-update").hidden = false;
+      if (snapshot.mode === "inventory") {
+        document.title = "维护项目 · 交付盘点";
+        get("acceptance").textContent = "维护项目 · 交付盘点";
+        get("version").textContent = snapshot.inventory ? "项目版本 " + snapshot.inventory.revision.slice(0, 12) : "尚未生成盘点报告";
+        get("filter").closest("label").hidden = true;
+        const names = ["需求", "场景 / 来源", "执行证据", "交付状态", "下一步"];
+        document.querySelectorAll("th").forEach((heading, index) => { heading.textContent = names[index]; });
+        renderInventory();
+      } else {
+        document.title = snapshot.acceptance_id + " · 验收追踪";
+        get("acceptance").textContent = snapshot.acceptance_id;
+        const prefix = snapshot.mode === "development" ? "测试驱动开发 · " : "";
+        get("version").textContent = snapshot.definitions ? prefix + "冻结定义 v" + snapshot.definitions.version : "尚未冻结";
+        renderSummary();
+        renderTable();
+        if (detail.open) get("detail-update").hidden = false;
+      }
     }
     lastRead = new Date().toLocaleTimeString("zh-CN");
     connection.removeAttribute("data-error");
@@ -334,7 +417,10 @@ async function refresh() {
   }
 }
 
-get("search").addEventListener("input", renderTable);
+get("search").addEventListener("input", () => {
+  if (current?.snapshot.mode === "inventory") renderInventory();
+  else renderTable();
+});
 get("filter").addEventListener("change", renderTable);
 get("refresh").addEventListener("click", refresh);
 get("rows").addEventListener("click", event => {

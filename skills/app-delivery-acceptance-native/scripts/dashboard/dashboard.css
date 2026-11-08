@@ -28,6 +28,8 @@ table { border-collapse: collapse; width: 100%; min-width: 880px; table-layout: 
 th, td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid #e1e7ef; overflow-wrap: anywhere; }
 th { background: #eef3f8; color: #3c5169; font-size: .88rem; }
 td { font-size: .91rem; }
+.requirement-start:not(:first-child) > td { border-top: 2px solid #acbfd1; }
+td.requirement { background: #f5f8fb; border-right: 1px solid #e1e7ef; }
 td ul, .relation-list { list-style: none; padding: 0; margin: 0; }
 td li + li { margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf1f6; }
 .node { padding: 0; border: 0; color: #184d81; text-align: left; font-weight: 650; overflow-wrap: anywhere; }
