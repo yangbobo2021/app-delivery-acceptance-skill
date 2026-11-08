@@ -221,9 +221,22 @@ def capture(folder, case):
                     for name in (row.get("smoke") or {}).get("output", {})
                 )
             ]
-            check(any(b["recorded_at"] < x["recorded_at"] < r["recorded_at"]
-                      for b in missing_config for x in ready for r in red_ok),
-                  "the planned missing-configuration failure and recovery before red were not proven")
+            recorded_failure = any(b["recorded_at"] < x["recorded_at"] < r["recorded_at"]
+                                   for b in missing_config for x in ready for r in red_ok)
+            direct_failure = next((i for i, row in enumerate(commands)
+                                   if re.search(r"python3\s+tools/environment\.py\s*>", row["command"])
+                                   and "--init" not in row["command"]
+                                   and "Missing .local-settings; follow README\nexit_code=1" in row.get("aggregatedOutput", "")
+                                   and any("operations.py" in later["command"] and "runtime" in later["command"]
+                                           and '"status": "ready"' in later.get("aggregatedOutput", "")
+                                           for later in commands[i+1:])), None)
+            retained = [path for path in stored.glob("AT-*/environment/*.log")
+                        if path.read_text(errors="replace").strip() == "Missing .local-settings; follow README"]
+            direct_proof = direct_failure is not None and bool(retained) and any(
+                x["recorded_at"] < r["recorded_at"] for x in ready for r in red_ok
+            )
+            output["missing_configuration_log"] = [p.relative_to(project).as_posix() for p in retained]
+            check(recorded_failure or direct_proof, "the planned missing-configuration failure and recovery before red were not proven")
     else:
         report = stored / "inventory.json"
         expected = {
