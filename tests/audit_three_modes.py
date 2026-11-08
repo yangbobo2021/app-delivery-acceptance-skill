@@ -103,6 +103,12 @@ def capture(folder, case):
     }
     if not finished:
         return {**output, "status": "running"}
+    if case == "B3":
+        probe = subprocess.check_output(["git", "show", f"{run['baseline']}:tools/environment.py"], cwd=project)
+        try:
+            compile(probe, "tools/environment.py", "exec")
+        except SyntaxError:
+            return {**output, "status": "invalid_fixture", "failures": ["the frozen fixture contains a malformed environment probe"]}
     facts = review_facts(records, project, thread)
     output["reviews"] = facts
     failures = []
@@ -197,8 +203,15 @@ def capture(folder, case):
             check(oracle.returncode == 0, "updated implementation fails the independent threshold/rounding oracle")
         if case == "B3":
             blocked, ready = records_of("runtime", "blocked"), records_of("runtime", "ready")
+            missing_config = [
+                row for row in blocked if any(
+                    "Missing .local-settings" in (project / name).read_text(errors="replace")
+                    for name in (row.get("smoke") or {}).get("output", {})
+                )
+            ]
             check(any(b["recorded_at"] < x["recorded_at"] < r["recorded_at"]
-                      for b in blocked for x in ready for r in red_ok), "environment failure and recovery before red were not proven")
+                      for b in missing_config for x in ready for r in red_ok),
+                  "the planned missing-configuration failure and recovery before red were not proven")
     else:
         report = stored / "inventory.json"
         expected = {
