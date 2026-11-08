@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 from evidence import capture, file_bindings, local, now, project_ref, publish_index, scoped, upstream, verify_bindings
-from records import Blocked, Project, acceptance_id, atomic_write, digest, encoded, read_json, require_text, token
+from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, require_text, token
 from results import attempts, view
 
 
@@ -454,6 +454,7 @@ DIRECT = {"archive": archive, "finish": finish, "cleanup": cleanup, "recover": r
 
 
 def main():
+    configure_io()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
     parser.add_argument("operation", choices=sorted(DIRECT))

@@ -22,6 +22,11 @@ class Blocked(ValueError):
     pass
 
 
+def configure_io():
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+
+
 def encoded(value):
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
 
@@ -308,6 +313,7 @@ class Project:
 
 
 def main():
+    configure_io()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
     subcommands = parser.add_subparsers(dest="operation", required=True)

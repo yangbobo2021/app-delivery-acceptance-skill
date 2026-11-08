@@ -12,7 +12,7 @@ from coverage_adapter import project_measure
 from coverage_python import measure_python, recompute
 from evidence import argv, capture, file_bindings, project_ref, recorded, upstream, verify_bindings
 from lifecycle import RECORDED
-from records import Blocked, Project, acceptance_id, digest, require_text, token
+from records import Blocked, Project, acceptance_id, configure_io, digest, require_text, token
 
 
 def match(project, identifier, request, definitions, path):
@@ -144,6 +144,7 @@ OPERATIONS = {
 
 
 def main():
+    configure_io()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
     parser.add_argument("operation", choices=sorted(OPERATIONS))

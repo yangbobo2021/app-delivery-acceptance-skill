@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from evidence import local, project_ref, verify_bindings, verify_checkout
-from records import Blocked, Project, acceptance_id, atomic_write, digest, encoded, read_json, token
+from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, token
 
 
 def attempts(project, identifier, section):
@@ -308,6 +308,7 @@ def serve(project, identifier, port=0):
 
 
 def main():
+    configure_io()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
     parser.add_argument("operation", choices=["view", "report", "serve"])
