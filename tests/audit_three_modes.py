@@ -148,6 +148,9 @@ def capture(folder, case):
 
     if case[0] in "AB":
         definitions = [load(p) for p in (project / ".acceptance/native-v1").glob("*/definitions/*.json")]
+        expected_id = re.search(r"\bAT-[a-z0-9-]+", MATRIX["cases"][case]["prompt"]).group()
+        output["acceptance_ids"] = sorted({d["acceptance_id"] for d in definitions})
+        check(output["acceptance_ids"] == [expected_id], "the acceptance record did not use the ID specified in the task")
         expected = "STOCK-03" if case[0] == "A" else "PRICE-02"
         check(any(r["source"]["kind"] == "file" and expected in r["source"]["text"]
                   for d in definitions for r in d["requirements"].values()), "requirement text was not frozen from source")
