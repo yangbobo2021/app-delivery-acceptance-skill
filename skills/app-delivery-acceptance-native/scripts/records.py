@@ -103,12 +103,18 @@ class Project:
     @contextmanager
     def writer(self, attempt=None):
         if self.git_root is not None:
+            private = f".acceptance-local/{NAMESPACE}/"
             result = subprocess.run(
-                ["git", "check-ignore", "--", f".acceptance-local/{NAMESPACE}/current.json"],
+                ["git", "check-ignore", "--", private],
                 cwd=self.root, capture_output=True, timeout=10,
             )
             if result.returncode != 0:
                 raise Blocked(f".acceptance-local/{NAMESPACE}/ must be Git-ignored before writing")
+            tracked = subprocess.run(
+                ["git", "ls-files", "--", private], cwd=self.root, capture_output=True, timeout=10,
+            )
+            if tracked.returncode != 0 or tracked.stdout:
+                raise Blocked("native local acceptance storage must not contain tracked files")
         lock = self.path(".acceptance-local", NAMESPACE, "writer.lock")
         recovery = self.path(".acceptance-local", NAMESPACE, "recovery.lock")
         lock.parent.mkdir(parents=True, exist_ok=True)

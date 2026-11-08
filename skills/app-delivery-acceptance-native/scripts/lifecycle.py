@@ -283,10 +283,16 @@ def archive(project, identifier, request):
                     file = project.path(name)
                     if not any(file.is_relative_to(root) for root in allowed):
                         raise Blocked("archive file is outside this acceptance")
+                    if any(part == ".git" or part.startswith(".env") for part in Path(name).parts) or file.name in {
+                        "agent.jsonl", "native-events.jsonl",
+                    }:
+                        raise Blocked("archive selection contains private environment or session material")
+                    size += file.stat().st_size
+                    if size > 50 * 1024 * 1024:
+                        raise Blocked("archive exceeds the byte limit")
                     raw = file.read_bytes()
-                    size += len(raw)
-                    if digest(raw) != sha or size > 50 * 1024 * 1024:
-                        raise Blocked("archive file changed or archive exceeds the byte limit")
+                    if digest(raw) != sha:
+                        raise Blocked("archive file changed")
                     bundle.writestr(f"files/{name}", raw)
             atomic_write(target, output.getvalue())
     return {"status": "archived", "archive": project_ref(project, target), "sha256": digest(target.read_bytes())}

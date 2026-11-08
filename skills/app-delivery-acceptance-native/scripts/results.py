@@ -216,7 +216,7 @@ def render(snapshot, files):
 
 def export_report(project, identifier, request):
     key = token(request["request_id"], "report request id")
-    target = project.shared(identifier, "records", f"report-{key}")
+    target = local(project, identifier, "reports", key)
     selection = request.get("scene_ids")
     with project.writer():
         if target.exists():

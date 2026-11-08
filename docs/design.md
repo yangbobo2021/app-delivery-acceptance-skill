@@ -65,12 +65,13 @@ tests/
         definitions/<定义版本>/
         cases/<scene-id>/       # 匹配与调试索引
         records/<scene-id>/     # 执行与复审索引
-        records/report-<id>/    # 报告与选定证据快照
+        records/archive-<id>.zip # 用户明确选定的归档
   .acceptance-local/           # 检查实际 Git 忽略规则
     native-v1/
       current.json
       <AT-ID>/
         workspace/             # 项目需要隔离写入时使用
+        reports/<id>/          # 本机报告与选定证据快照
         <operation>/<request-id>/
           request.json
           result.json

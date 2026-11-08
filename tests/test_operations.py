@@ -150,6 +150,7 @@ class OperationsTests(unittest.TestCase):
         view = self.run_json("results.py", ["view", self.id], None, 0)
         self.assertEqual(view["scenes"]["SC1"]["status"], "passed")
         report = self.run_json("results.py", ["report", self.id], {"request_id": "report", "scene_ids": ["SC1"]}, 0)
+        self.assertTrue(report["report"].startswith(".acceptance-local/"))
         snapshot_path = self.root / report["snapshot"]
         snapshot = json.loads(snapshot_path.read_text())
         self.assertIn("独立复审", (self.root / report["report"]).read_text())

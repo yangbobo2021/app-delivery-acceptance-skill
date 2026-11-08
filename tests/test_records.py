@@ -181,6 +181,9 @@ class RecordsTests(unittest.TestCase):
         with self.assertRaisesRegex(records.Blocked, "must be Git-ignored"):
             self.create()
         self.assertFalse((self.root / ".acceptance").exists())
+        (self.root / ".gitignore").write_text("/.acceptance-local/native-v1/current.json\n")
+        with self.assertRaisesRegex(records.Blocked, "must be Git-ignored"):
+            self.create()
         (self.root / ".gitignore").write_text("/.acceptance-local/\n")
         self.assertEqual(self.create()["status"], "created")
 
