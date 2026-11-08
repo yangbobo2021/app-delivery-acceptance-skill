@@ -34,6 +34,16 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(entries, {case["entry"] for case in data["cases"]})
         self.assertEqual(json.loads((package / "package.json").read_text())["version"], data["reference"]["version"])
 
+    @unittest.skipUnless(os.environ.get("ACCEPTANCE_REFERENCE"), "set ACCEPTANCE_REFERENCE to the pinned source")
+    def test_coexists_with_actual_legacy_store_and_view_inventory(self):
+        script = Path(__file__).with_name("legacy_coexistence.mjs")
+        result = subprocess.run(
+            ["node", str(script), os.environ["ACCEPTANCE_REFERENCE"], sys.executable],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertGreater(json.loads(result.stdout)["preserved_files"], 0)
+
     def test_historical_pass_and_failure_are_real_and_bound_to_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             for case, expected_exit in (("C3", 0), ("C4", 1)):
