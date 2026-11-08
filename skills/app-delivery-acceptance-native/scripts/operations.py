@@ -12,6 +12,7 @@ from coverage_adapter import project_measure
 from coverage_python import measure_python, recompute
 from evidence import argv, capture, file_bindings, project_ref, recorded, upstream, verify_bindings
 from lifecycle import RECORDED
+from tdd import green, red
 from records import Blocked, Project, acceptance_id, configure_io, digest, require_text, token
 
 
@@ -138,7 +139,7 @@ def coverage(project, identifier, request, definitions, path):
 OPERATIONS = {
     "match": match, "runtime": runtime, "coverage": coverage,
     "debug": debug, "execute": execute, "review": review, "history": history,
-    "manual": manual, "coverage-recompute": recompute,
+    "manual": manual, "coverage-recompute": recompute, "tdd-red": red, "tdd-green": green,
     **RECORDED,
 }
 

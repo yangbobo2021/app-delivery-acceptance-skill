@@ -136,7 +136,8 @@ def bound_attempt(project, identifier, section, key, expected):
 
 def review(project, identifier, request, definitions, path):
     section = request["target_operation"]
-    expected = {"debug": "debugged", "execute": "executed", "history": "imported", "manual": "observed"}
+    expected = {"debug": "debugged", "execute": "executed", "history": "imported", "manual": "observed",
+                "tdd-red": "red_observed", "tdd-green": "green_observed"}
     if section not in expected:
         raise Blocked("review target must be a real execution or debugging attempt")
     target, sha = bound_attempt(project, identifier, section, request["target"], expected[section])
@@ -166,12 +167,18 @@ def review(project, identifier, request, definitions, path):
         raise Blocked("Reviewer must return a judgment for every actual case")
     for key, finding in judgments.items():
         require_text(finding["reason"], "review reason")
-        if finding["status"] not in JUDGMENTS:
+        if finding["status"] not in JUDGMENTS and not (
+            section == "tdd-red" and finding["status"] == "expected_failure"
+        ):
             raise Blocked("unrecognized review judgment")
         if any(item not in target.get("obligations", {}) for item in finding.get("covers", [])):
             raise Blocked("review coverage must reference declared scene obligations")
         result = target["results"][key]
-        if finding["status"] == "passed" and section in {"debug", "execute"}:
+        if finding.get("design_status") is not None and (
+            section != "debug" or finding["status"] != "product_defect" or finding["design_status"] != "valid"
+        ):
+            raise Blocked("design_status valid is only used for independently confirmed product defects during debug")
+        if finding["status"] == "passed" and section in {"debug", "execute", "tdd-green"}:
             if not result["execution"] or result["execution"]["exit_code"] != 0 or result["coverage"]["status"] == "unavailable":
                 raise Blocked("a failed execution or missing required coverage cannot pass")
         if finding["status"] == "passed" and section == "manual":
@@ -198,7 +205,12 @@ def execute(project, identifier, request, definitions, path):
     selected = request["selected_case_ids"]
     if not isinstance(selected, list) or not selected or len(selected) != len(set(selected)):
         raise Blocked("provide distinct case ids for this run")
-    if any(assessment["judgments"].get(key, {}).get("status") != "passed" for key in selected):
+    def valid_design(finding):
+        return finding.get("status") == "passed" or (
+            finding.get("status") == "product_defect" and finding.get("design_status") == "valid"
+        )
+
+    if any(not valid_design(assessment["judgments"].get(key, {})) for key in selected):
         raise Blocked("selected cases lack a passing design review")
     coverage = None
     if design["coverage_preparation"]:
