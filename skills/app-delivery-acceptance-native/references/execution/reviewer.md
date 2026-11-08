@@ -2,7 +2,7 @@
 
 主 Agent 使用宿主的原生子 Agent 调用，启动一位新上下文的 Reviewer，等待实际返回。Codex 的 `spawn_agent` 必须明确传 `fork_turns: "none"`。交接只提供任务、文件路径和需要核对的事实，不提供主 Agent 的判断或完整会话。Reviewer 对项目资料和证据只读，只能写自己本轮的意见文件。交接真实验收 ID、冻结需求和场景、项目测试约定、实际用例 ID、源码及候选版本、对应执行或调试结果和证据。需要图像判断时让 Reviewer 实际查看相关图片。以原始材料判断，独立确认每个 TC 的覆盖边界和原始证据。
 
-先为这一轮选定 `review-v1` 等唯一请求 ID。请 Reviewer 自己写入 `.acceptance-local/native-v1/<AT-ID>/review-inbox/<请求ID>.json`，并报告写入结果。使用真实 JSON，每个实际 TC 有一项：
+先为这一轮选定 `review-v1` 等唯一请求 ID。先创建意见目录，向 Reviewer 提供仓库根路径和完整目标文件路径。请 Reviewer 自己写入 `.acceptance-local/native-v1/<AT-ID>/review-inbox/<请求ID>.json`，并报告写入结果。使用真实 JSON，每个实际 TC 有一项：
 
 ```json
 {"cases":{"<TC-ID>":{"status":"needs_revision","reason":"实际观察到的具体问题与来源","covers":["实际支持的检查项 ID"]}}}
@@ -12,7 +12,7 @@
 
 判断创建与持久化场景时，核对候选用例是否用场景里的独立预期断言了首次写入值。典型的房间、时间、标题需要逐字段核对。若代码仅比较创建返回和随后查询返回的两个产品观察，即使两者都一致，也应把缺少独立预期判为 `needs_revision`，明确指出实际漏掉的字段和位置。
 
-由主 Agent 从工具返回取得真实 Reviewer 会话 ID。计算目标 `result.json` 的实际 SHA-256，用 [操作工具](../../scripts/operations.py) 的 `review <AT-ID>` 记录。工具直接读取 Reviewer 自己写出的文件并保留原始字节，主 Agent 只传路径。
+由主 Agent 从工具返回取得真实 Reviewer 会话 ID。以意见文件的文件名（去掉 `.json`）作为 `request_id`。用程序直接读取目标 `result.json` 字节计算 SHA-256 并填入请求，用 [操作工具](../../scripts/operations.py) 的 `review <AT-ID>` 记录。工具直接读取 Reviewer 自己写出的文件并保留原始字节，主 Agent 只传路径。
 
 ```json
 {
