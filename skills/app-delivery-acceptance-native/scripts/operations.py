@@ -40,6 +40,9 @@ def match(project, identifier, request, definitions, path):
         status = entry["status"]
         if status not in {"active", "skipped"}:
             raise Blocked("case status must be active or skipped")
+        kind = entry.get("kind", "automated")
+        if kind not in {"automated", "manual"}:
+            raise Blocked("case kind must be automated or manual")
         references = {}
         for obligation, assertion in entry["covers"].items():
             if obligation not in obligations or require_text(assertion, "case assertion quote") not in source["text"]:
@@ -58,6 +61,8 @@ def match(project, identifier, request, definitions, path):
         if identity in cases:
             raise Blocked(f"duplicate case id: {identity}")
         cases[identity] = {"source": source, "selector": selector, "status": status, "covers": references}
+        if kind == "manual":
+            cases[identity]["kind"] = kind
         if status == "active":
             supported.update(references)
     missing = sorted(obligations.keys() - supported)

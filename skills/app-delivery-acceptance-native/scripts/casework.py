@@ -99,11 +99,20 @@ def debug(project, identifier, request, definitions, path):
     cases = request["cases"]
     if not isinstance(cases, dict) or not cases:
         raise Blocked("supply actual selected case ids and their individual commands")
+    baseline = request.get("purpose") == "tdd-baseline"
+    if baseline:
+        verify_bindings(project, matched["bindings"])
+        if matched["coverage"] != "full" or any(matched["cases"].get(name, {}).get("status") != "active" for name in cases):
+            raise Blocked("TDD baseline needs full matching and active matched cases for the scene")
     for name, case in cases.items():
         if not token(name, "case id").startswith("TC-"):
             raise Blocked("case ids must start with TC-")
+        if matched["cases"].get(name, {}).get("kind") == "manual":
+            raise Blocked("a manual verification item must be recorded as an observation")
         if not isinstance(case["files"], list) or not case["files"]:
             raise Blocked("each case must identify its test files")
+        if baseline and matched["cases"][name]["source"]["path"] not in case["files"]:
+            raise Blocked("TDD baseline must bind the matched test source")
         argv(case["command"])
     candidate_files = sorted({file for case in cases.values() for file in case["files"]})
     candidate = file_bindings(project, candidate_files)
@@ -117,6 +126,7 @@ def debug(project, identifier, request, definitions, path):
     verify_bindings(project, bindings)
     return {
         "status": "debugged", "cases": cases, "results": results, "bindings": bindings,
+        **({"purpose": "tdd-baseline"} if baseline else {}),
         "coverage_preparation": coverage["request_id"] if coverage else None,
         "coverage_basis": request.get("coverage_basis"),
         "obligations": matched["obligations"], "cwd": cwd, "revision": runtime.get("revision"),
@@ -261,11 +271,18 @@ def manual(project, identifier, request, definitions, path):
         raise Blocked("manual evidence needs actual case observations")
     product_version = require_text(request["product_version"], "observed product version")
     obligations = {}
+    planned = {}
     if request.get("match"):
         matched = upstream(project, identifier, request, "match", "match", "matched")
         if matched["scene"] != request["scene"]:
             raise Blocked("manual matching belongs to a different scene")
         obligations = matched["obligations"]
+        planned = {name: item for name, item in matched["cases"].items() if item.get("kind") == "manual"}
+    if planned and any(name not in planned or planned[name]["status"] != "active" for name in cases):
+        raise Blocked("manual observation must use an active verification item from the scene")
+    if planned and not request.get("product_files"):
+        raise Blocked("manual verification needs the files of the observed product version")
+    bindings = file_bindings(project, request["product_files"]) if request.get("product_files") else {}
     for case_id, observations in cases.items():
         if not token(case_id, "manual case id").startswith("TC-") or not observations:
             raise Blocked("manual case needs a TC id and observed operations")
@@ -288,8 +305,10 @@ def manual(project, identifier, request, definitions, path):
             "execution": None, "coverage": {"status": "unknown"},
             "operations": observations, "attachments": attachments,
         }
+    if bindings:
+        verify_bindings(project, bindings)
     return {
-        "status": "observed", "results": result, "bindings": {},
+        "status": "observed", "results": result, "bindings": bindings,
         "product_version": product_version, "selection": "selected_cases_only", "obligations": obligations,
         "artifacts": evidence_files(project, path),
     }

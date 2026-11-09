@@ -52,6 +52,38 @@ class OperationsTests(unittest.TestCase):
             "definitions_sha256": self.freeze["sha256"], **request,
         }, expected_code)
 
+    def test_scope_review_rejects_omissions_and_survives_only_unrelated_changes(self):
+        baseline = self.freeze["sha256"]
+        review = {
+            "requirement_ids": ["R1"], "analysis": "实际核对已冻结的可观察行为。",
+            "scope_review": {"baseline_sha256": baseline, "scenario_ids": ["SC1"]},
+        }
+        self.operation("analyze", {
+            **review, "request_id": "missing",
+            "scope_review": {**review["scope_review"], "scenario_ids": []},
+        }, expected_code=2)
+        result = self.operation("analyze", {**review, "request_id": "review-r1"})
+        self.assertEqual(result["scope_review"]["added_scenario_ids"], [])
+        source = self.record("source", "scenarios.md", "3", "10")
+        self.freeze = self.record("freeze", self.id, payload={
+            "request_id": "add-unrelated", "base_sha256": baseline,
+            "requirements": [{"id": "R2", "source": self.record("source", "requirements.md", "3", "3")}],
+            "scenarios": [{"id": "SC2", "requirements": ["R2"], "source": source}],
+        })
+        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        self.assertEqual(snapshot["scope_reviews"]["R1"]["record"], result["record"])
+        self.freeze = self.record("freeze", self.id, payload={
+            "request_id": "add-related", "base_sha256": self.freeze["sha256"],
+            "scenarios": [{"id": "SC3", "requirements": ["R1"], "source": source}],
+        })
+        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        self.assertNotIn("R1", snapshot.get("scope_reviews", {}))
+        revised = self.operation("analyze", {
+            **review, "request_id": "review-r1-updated",
+            "scope_review": {**review["scope_review"], "scenario_ids": ["SC1", "SC3"]},
+        })
+        self.assertEqual(revised["scope_review"]["added_scenario_ids"], ["SC3"])
+
     def test_matching_distinguishes_full_partial_and_no_match_without_running(self):
         test_file = "tests/check_s1.py"
         source = self.record("source", test_file, "20", "30")
@@ -441,6 +473,54 @@ class OperationsTests(unittest.TestCase):
             "review_file": str((inbox / "delivery.json").relative_to(self.root)),
         }, 2)
         self.assertIn("lacks required", blocked["reason"])
+
+    def test_manual_item_retains_distinct_runs_and_requires_current_product(self):
+        self.operation("analyze", {
+            "request_id": "scope", "requirement_ids": ["R1"], "analysis": "核对 SC1 范围。",
+            "scope_review": {"baseline_sha256": self.freeze["sha256"], "scenario_ids": ["SC1"]},
+        })
+        (self.root / "manual-check.md").write_text("# @case-id: TC-manual\n观察返回状态 409。\n")
+        source = self.record("source", "manual-check.md", "2", "2")
+        self.operation("match", {
+            "request_id": "manual-match", "scene": "SC1", "search_scope": "人工步骤",
+            "inspected": {"manual-check.md": source["sha256"]},
+            "obligations": [{"id": "reject", "quote": "第二次响应 JSON status 必须为 409"}],
+            "cases": [{"selector": "观察返回状态", "source": source, "kind": "manual",
+                       "status": "active", "covers": {"reject": "观察返回状态 409。"}}],
+        })
+        product = self.root / "candidate.txt"
+        product.write_text("candidate one")
+        for run in ("first", "second"):
+            evidence = self.root / f"{run}.txt"
+            evidence.write_text(f"Observed 409 in the {run} run.")
+            result = self.operation("manual", {
+                "request_id": run, "scene": "SC1", "match": "manual-match",
+                "product_version": "candidate one", "product_files": ["candidate.txt"],
+                "cases": {"TC-manual": [{
+                    "action": "Inspect result", "expected": "409", "observed": "409",
+                    "performed_by": "fixture observer", "performed_at": "2026-11-08T00:00:00Z",
+                    "receipt_reference": run, "outcome": "observed_success",
+                    "evidence": {evidence.name: hashlib.sha256(evidence.read_bytes()).hexdigest()},
+                }]},
+            })
+            self.operation("review", {
+                "request_id": f"review-{run}", "scene": "SC1", "target_operation": "manual", "target": run,
+                "target_sha256": hashlib.sha256((self.root / result["record"]).read_bytes()).hexdigest(),
+                "reviewer_session": "fixture-reviewer",
+                "raw_review": json.dumps({"cases": {"TC-manual": {
+                    "status": "passed", "reason": "409 was observed", "covers": ["reject"],
+                }}}),
+            })
+        view = self.run_json("results.py", ["view", self.id], None, 0)
+        self.assertEqual(view["requirement_results"]["R1"]["status"], "passed")
+        scene = view["scenes"]["SC1"]
+        self.assertEqual(scene["case_design"]["TC-manual"]["kind"], "manual")
+        self.assertEqual([row["run"] for row in scene["history"]], ["first", "second"])
+        product.write_text("candidate two")
+        view = self.run_json("results.py", ["view", self.id], None, 0)
+        self.assertEqual(view["requirement_results"]["R1"]["status"], "not_fully_validated")
+        self.assertEqual([row["cases"]["TC-manual"]["status"] for row in view["scenes"]["SC1"]["history"]],
+                         ["stale", "stale"])
 
     @unittest.skipUnless(os.environ.get("ACCEPTANCE_C8"), "set ACCEPTANCE_C8 to the tested c8 executable")
     def test_project_coverage_adapter_uses_native_node_child_data(self):

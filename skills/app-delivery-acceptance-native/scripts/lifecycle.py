@@ -13,7 +13,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from evidence import capture, file_bindings, local, now, project_ref, publish_index, scoped, upstream, verify_bindings
+from evidence import capture, file_bindings, local, now, project_ref, publish_index, requirement_scope, scoped, upstream, verify_bindings
 from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, require_text, token
 from results import attempts, view
 
@@ -23,7 +23,34 @@ def analyze(project, identifier, request, definitions, path):
     selected = request["requirement_ids"]
     if not selected or not set(selected) <= definitions["requirements"].keys():
         raise Blocked("analysis must reference actual frozen requirements")
-    return {"status": "analyzed", "analysis": text, "requirements": {item: definitions["requirements"][item] for item in selected}}
+    result = {"status": "analyzed", "analysis": text, "requirements": {item: definitions["requirements"][item] for item in selected}}
+    if "scope_review" in request:
+        if len(selected) != 1:
+            raise Blocked("scene scope review must address exactly one requirement")
+        requirement = selected[0]
+        review = request["scope_review"]
+        baseline_sha = review["baseline_sha256"]
+        baseline = next((item for _, sha, item in project.versions(identifier) if sha == baseline_sha), None)
+        if not baseline or requirement not in baseline["requirements"]:
+            raise Blocked("scene scope review needs the frozen baseline for this requirement")
+        original = requirement_scope(baseline, requirement)
+        current = requirement_scope(definitions, requirement)
+        if any(definitions["scenarios"][name]["requirement_sha256"][requirement] != current["requirement_sha256"]
+               for name in current["scenarios"]):
+            raise Blocked("scene scope review must use scenes bound to the current requirement")
+        if (original["requirement_sha256"] != current["requirement_sha256"]
+                or any(current["scenarios"].get(name) != sha for name, sha in original["scenarios"].items())):
+            raise Blocked("scene scope review must preserve the frozen baseline")
+        listed = review["scenario_ids"]
+        if not isinstance(listed, list) or len(listed) != len(current["scenarios"]) or set(listed) != current["scenarios"].keys():
+            raise Blocked("scene scope review must list every current scene for the requirement")
+        result["scope_review"] = {
+            "requirement_id": requirement,
+            "baseline_sha256": baseline_sha,
+            "scope": current,
+            "added_scenario_ids": sorted(current["scenarios"].keys() - original["scenarios"].keys()),
+        }
+    return result
 
 
 def assess_scenarios(project, identifier, request, definitions, path):

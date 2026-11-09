@@ -13,6 +13,15 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def requirement_scope(definitions, requirement):
+    """Bind only the selected requirement and its scenes, across unrelated freezes."""
+    return {
+        "requirement_sha256": digest(encoded(definitions["requirements"][requirement])),
+        "scenarios": {name: digest(encoded(scene)) for name, scene in definitions["scenarios"].items()
+                      if requirement in scene["requirement_sha256"]},
+    }
+
+
 def scoped(project, identifier, request):
     if project.current() != identifier:
         raise Blocked("select the intended native acceptance first")

@@ -3,10 +3,11 @@
 const labels = {
   passed: "通过", needs_revision: "需修订", not_fully_validated: "尚未完成验收",
   product_defect: "产品缺陷", pending_review: "待独立复审", definition_changed: "定义有变化",
-  not_executed: "未执行", stale: "旧版本", evidence_missing: "证据缺失", historical: "历史记录",
+  not_executed: "未执行", no_case_receipt: "无单独执行记录", stale: "旧版本", evidence_missing: "证据缺失", historical: "历史记录",
   definition_conflict: "定义冲突", insufficient_evidence: "证据不足", skipped: "跳过",
   measured: "已采集", off: "关闭", unavailable: "未取得覆盖率", unknown: "未核对",
   expected_failure: "已确认预期红灯", tdd_in_progress: "TDD 进行中", tdd_verified: "TDD 绿灯已复审",
+  baseline_passed: "基线通过", baseline_unverified: "基线未验证", tdd_baseline_verified: "TDD 基线已验证",
   verified: "已验证", failed: "失败", recheck: "待复验", untested: "未验证", unconfirmed: "待确认",
   source_missing: "依据缺失", conflict: "依据冲突", blocked: "受阻",
 };
@@ -53,8 +54,10 @@ function readSnapshot(snapshot) {
     nodes.get(right).relations.add(left);
   }
   for (const [id, item] of Object.entries(snapshot.requirements ?? {})) {
+    const scope = snapshot.scope_reviews?.[id];
     requirements.set(id, add(key("requirement", id), {
-      label: id, kind: "需求 / 规则", title: title(item.source, id), source: item.source,
+      label: id, kind: "需求 / 规则", title: title(item.source, id), source: item.source, scope,
+      status: snapshot.requirement_results?.[id]?.status,
     }));
   }
   const connected = new Set();
@@ -73,39 +76,44 @@ function readSnapshot(snapshot) {
     for (const caseId of [...caseIds].sort()) {
       const item = scene.cases[caseId];
       const design = scene.case_design?.[caseId];
+      const history = scene.history.filter(r => r.cases[caseId]);
+      const manual = design?.kind === "manual" || history.some(run => run.operation === "manual");
       const caseKey = add(key("case", id, caseId), {
-        label: caseId, kind: "用例 / 操作", title: design?.selector ?? caseId,
+        label: caseId, kind: manual ? "人工验证项" : "用例 / 操作",
+        title: design?.selector ?? (snapshot.mode === "development" && design?.command ? design.command.join(" ") : caseId),
         source: design?.source, design, status: design?.status === "skipped" ? "skipped" : item?.status,
       });
       link(sceneKey, caseKey);
       let execution, review, outcome;
-      const history = scene.history.filter(r => r.cases[caseId]);
       const currentRun = scene.current_runs?.[caseId];
+      const currentAttempt = scene.current_attempts?.[caseId];
       for (const run of history) {
         const observed = run.cases[caseId];
-        const runKey = add(key("run", id, caseId, run.run), {
+        const identity = run.record ?? run.run;
+        const runKey = add(key("run", id, caseId, identity), {
           label: run.run, kind: "实际执行", title: caseId, status: observed.status, observed,
-          stage: {"tdd-red": "红灯", "tdd-green": "绿灯"}[run.operation],
-          version: run.definition_sha256, evidence: observed.evidence,
+          stage: {"tdd-red": "红灯", "tdd-green": "绿灯", "tdd-baseline": "基线"}[run.operation],
+          version: run.definition_sha256, product: run.product_version, bindings: run.bindings,
+          record: run.record, recordedAt: run.recorded_at, evidence: observed.evidence,
         });
         link(caseKey, runKey);
         let reviewKey;
         if (observed.review) {
-          reviewKey = add(key("review", id, caseId, run.run), {
+          reviewKey = add(key("review", id, caseId, identity), {
             label: caseId, kind: "独立复审", title: run.run, status: observed.review.status,
             reason: observed.review.reason, covers: observed.review.covers,
             evidence: observed.evidence.filter(name => name.endsWith("/reviewer.txt")),
           });
           link(runKey, reviewKey);
-          link(caseKey, reviewKey);
         }
-        if (run.run === currentRun || (!currentRun && run === history.at(-1))) {
+        if (currentAttempt ? identity === currentAttempt : run.run === currentRun || (!currentRun && run === history.at(-1))) {
           execution = runKey;
           review = reviewKey;
           outcome = observed.status;
         }
       }
-      cases.push({id: caseKey, execution, review, outcome: outcome ?? (design?.status === "skipped" ? "skipped" : "not_executed")});
+      cases.push({id: caseKey, execution, review, attempts: history.length,
+                  outcome: outcome ?? (design?.status === "skipped" ? "skipped" : "not_executed")});
     }
     groups.push({id: sceneKey, parents, cases, executed: scene.history.length > 0, status: scene.status});
   }
@@ -164,6 +172,10 @@ function renderTable() {
         const cell = requirementCell(tr, visible.length);
         if (requirement) {
           cell.append(nodeButton(parent, requirement.label), element("p", requirement.title, "muted"));
+          if (requirement.status) cell.append(status(requirement.status));
+          if (requirement.scope) {
+            cell.append(element("p", "范围已核对 · 新增 " + requirement.scope.added_scenario_ids.length + " 条", "muted"));
+          }
         } else {
           cell.textContent = "独立场景";
         }
@@ -177,7 +189,7 @@ function renderTable() {
       }
       if (!matches.length) {
         casesCell.textContent = "尚无关联用例";
-        runsCell.append(status("not_executed"));
+        runsCell.append(status(current.snapshot.mode === "development" ? "no_case_receipt" : "not_executed"));
         reviewsCell.textContent = "尚无结论";
       } else {
         const lists = [casesCell, runsCell, reviewsCell].map(cell => cell.appendChild(element("ul")));
@@ -187,13 +199,15 @@ function renderTable() {
           lists[0].append(element("li"));
           lists[0].lastElementChild.append(nodeButton(item.id, test.label));
           if (test.title !== test.label) lists[0].lastElementChild.append(element("p", test.title, "muted"));
+          lists[0].lastElementChild.append(element("p", test.kind + " · " + item.attempts + " 次执行", "muted"));
           const run = lists[1].appendChild(element("li"));
           if (item.execution) {
             const node = current.nodes.get(item.execution);
             run.append(nodeButton(item.execution, node.stage ? node.stage + " · " + node.label : node.label),
               element("p", node.observed.exit_code == null ? test.label : test.label + " · 退出 " + node.observed.exit_code, "muted"));
           }
-          run.append(status(item.outcome));
+          run.append(status(current.snapshot.mode === "development" && item.outcome === "not_executed"
+            ? "no_case_receipt" : item.outcome));
           const review = lists[2].appendChild(element("li"));
           if (item.review) {
             const opinion = current.nodes.get(item.review);
@@ -240,7 +254,11 @@ function renderSummary() {
     ["有产品缺陷", scenes.filter(group => group.cases.some(item => item.outcome === "product_defect")).length],
   ];
   const shown = current.snapshot.mode === "development"
-    ? [...totals.slice(0, 4), ["绿灯已复审", scenes.filter(group => group.status === "tdd_verified").length]] : totals;
+    ? [...totals.slice(0, 4), ["绿灯已复审", scenes.filter(group => group.status === "tdd_verified").length],
+      ["基线已验证", scenes.filter(group => group.status === "tdd_baseline_verified").length]] : totals;
+  if (current.snapshot.scope_reviews) {
+    shown.splice(1, 0, ["已核对范围", Object.keys(current.snapshot.scope_reviews).length]);
+  }
   get("summary").replaceChildren(...shown.map(([label, count]) => {
     const card = element("div", undefined, "stat");
     card.append(element("strong", count), element("span", label));
@@ -284,6 +302,11 @@ function renderDetail() {
     if (node.design?.files) body.append(element("p", node.design.files.join("、")));
     if (node.design?.command) body.append(element("pre", JSON.stringify(node.design.command)));
     if (node.version) body.append(element("p", "执行绑定定义 " + node.version, "muted"));
+    if (node.product) body.append(element("p", "被测版本 " + node.product));
+    if (node.record) body.append(element("p", node.record, "muted"));
+    for (const [path, sha] of Object.entries(node.bindings ?? {})) {
+      body.append(element("p", path + " · SHA-256 " + sha, "muted"));
+    }
     for (const name of node.evidence ?? []) {
       const url = reading.snapshot.evidence_urls?.[name];
       if (!url) continue;
@@ -299,12 +322,16 @@ function renderDetail() {
     body.append(element("p", node.title));
     if (node.status) body.append(status(node.status));
     if (node.reason) body.append(element("p", node.reason));
+    if (node.scope) {
+      body.append(element("p", node.scope.analysis), element("p", node.scope.record, "muted"));
+    }
     if (node.missing?.length) body.append(element("p", "未取得通过证据的检查项 " + node.missing.join("、")));
     if (node.design?.design_review) {
       const review = node.design.design_review;
       body.append(element("p", "设计复审 · " + (labels[review.status] ?? review.status) + " · " + review.reason));
     }
     if (node.observed) {
+      if (node.recordedAt) body.append(element("p", "记录时间 " + node.recordedAt, "muted"));
       body.append(element("p", "退出码 " + (node.observed.exit_code ?? "无") + " · 覆盖率 " + labels[node.observed.coverage]));
       for (const item of node.observed.observations ?? []) {
         body.append(element("p", item.action + " · " + item.observed));
@@ -352,6 +379,17 @@ function renderInventory() {
       if (item.static_findings?.length) {
         source.append(element("p", "静态发现 · " + item.static_findings.join("、"), "muted"));
       }
+      const cases = row.appendChild(element("td"));
+      if (item.cases?.length) {
+        const list = cases.appendChild(element("ul"));
+        for (const test of item.cases) {
+          const entry = list.appendChild(element("li"));
+          entry.append(element("strong", test.selector), element("p", test.source, "muted"));
+          if (test.id) entry.append(element("p", test.id, "muted"));
+        }
+      } else {
+        cases.textContent = item.cases ? "未找到关联用例" : "未记录用例关联";
+      }
       row.append(element("td", (item.evidence ?? []).join("、") || "无适用执行证据"));
       const state = row.appendChild(element("td"));
       state.append(status(item.status));
@@ -362,7 +400,7 @@ function renderInventory() {
   }
   if (!rows.length) {
     const row = element("tr");
-    row.appendChild(element("td", inventory ? "没有匹配记录" : "尚未生成盘点报告")).colSpan = 5;
+    row.appendChild(element("td", inventory ? "没有匹配记录" : "尚未生成盘点报告")).colSpan = 6;
     rows.push(row);
   }
   get("rows").replaceChildren(...rows);
@@ -393,8 +431,14 @@ async function refresh() {
         get("acceptance").textContent = "维护项目 · 交付盘点";
         get("version").textContent = snapshot.inventory ? "项目版本 " + snapshot.inventory.revision.slice(0, 12) : "尚未生成盘点报告";
         get("filter").closest("label").hidden = true;
-        const names = ["需求", "场景 / 来源", "执行证据", "交付状态", "下一步"];
-        document.querySelectorAll("th").forEach((heading, index) => { heading.textContent = names[index]; });
+        const names = ["需求", "场景 / 来源", "关联用例", "执行证据", "交付状态", "下一步"];
+        const headers = document.querySelector("thead tr");
+        headers.replaceChildren(...names.map(name => {
+          const heading = element("th", name);
+          heading.scope = "col";
+          return heading;
+        }));
+        headers.closest(".table-scroll").setAttribute("aria-label", "维护盘点追踪表");
         renderInventory();
       } else {
         document.title = snapshot.acceptance_id + " · 验收追踪";

@@ -10,7 +10,7 @@ import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from evidence import local, project_ref, verify_bindings, verify_checkout
+from evidence import local, project_ref, requirement_scope, verify_bindings, verify_checkout
 from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, token
 
 
@@ -44,7 +44,7 @@ def live_attempt(project, run):
         return False
 
 
-def view(project, identifier, selected=None, *, dashboard=False):
+def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     manifest = project.manifest(identifier)
     versions = project.versions(identifier)
     if not versions:
@@ -61,28 +61,39 @@ def view(project, identifier, selected=None, *, dashboard=False):
         "requirements": current["requirements"], "scenes": {}, "evidence": {},
     }
     invalidated = set(project.receipt(versions[-1], "current")["scenes_needing_revalidation"])
+    reviews = {}
+    for row, _ in attempts(project, identifier, "analyze"):
+        review = row.get("scope_review")
+        if row["status"] != "analyzed" or not review:
+            continue
+        requirement = review["requirement_id"]
+        if requirement in current["requirements"] and review["scope"] == requirement_scope(current, requirement):
+            reviews[requirement] = {**review, "analysis": row["analysis"], "record": row["record"]}
+    if reviews:
+        result["scope_reviews"] = reviews
     execution = [item for section in ("execute", "manual", "history") for item in attempts(project, identifier, section)]
     development = [item for section in ("tdd-red", "tdd-green") for item in attempts(project, identifier, section)] if dashboard else []
-    if development and not execution:
+    debugged = attempts(project, identifier, "debug") if dashboard else ()
+    development.extend(item for item in debugged if item[0].get("purpose") == "tdd-baseline")
+    if phase == "development" or (phase is None and development and not execution):
         result["mode"] = "development"
         execution = development
     execution.sort(key=lambda item: (item[0].get("recorded_at", ""), item[0]["request_id"]))
     opinions = [review for review, _ in attempts(project, identifier, "review") if review["status"] == "reviewed"]
     matched = [item for item, _ in attempts(project, identifier, "match") if item["status"] == "matched"]
-    debugged = attempts(project, identifier, "debug") if dashboard else ()
     for scene, definition in scenes.items():
         fresh_cases, history, checklist, expected = {}, [], {}, set()
-        case_design, current_runs = {}, {}
+        case_design, current_runs, current_attempts = {}, {}, {}
         for match in matched:
             if match["scene"] == scene and match["definitions_sha256"] == current_sha:
                 expected = set(match["cases"])
                 checklist = match["obligations"]
-                if dashboard:
-                    case_design = dict(match["cases"])
+                case_design = dict(match["cases"])
         if dashboard:
             for candidate, sha in reversed(debugged):
                 if (
                     candidate.get("scene") != scene or candidate["status"] != "debugged"
+                    or (candidate.get("purpose") == "tdd-baseline") != (result.get("mode") == "development")
                     or candidate["definitions_sha256"] != current_sha or scene in invalidated
                     or not live_attempt(project, candidate) or not intact(project, candidate["artifacts"])
                 ):
@@ -97,9 +108,10 @@ def view(project, identifier, selected=None, *, dashboard=False):
                 checklist = candidate.get("obligations") or checklist
                 break
         for run, sha in execution:
-            if run.get("scene") != scene or run["status"] not in {
+            baseline = run.get("purpose") == "tdd-baseline"
+            if run.get("scene") != scene or not (baseline and run["status"] == "debugged" or run["status"] in {
                 "executed", "observed", "imported", "red_observed", "green_observed",
-            }:
+            }):
                 continue
             applicable = (
                 run["operation"] != "history" and scene not in invalidated and run["definitions_sha256"] == current_sha
@@ -118,6 +130,9 @@ def view(project, identifier, selected=None, *, dashboard=False):
                     "stale" if not applicable else
                     verdict["status"] if verdict else "pending_review"
                 )
+                if baseline and evidence_valid and applicable:
+                    status = ("baseline_passed" if execution_receipt and execution_receipt["exit_code"] == 0
+                              and item["coverage"]["status"] != "unavailable" else "baseline_unverified")
                 attachments = dict(item.get("attachments", {}))
                 if execution_receipt:
                     attachments.update(execution_receipt.get("output", {}))
@@ -143,17 +158,22 @@ def view(project, identifier, selected=None, *, dashboard=False):
                     "coverage_statistics": statistics, "observations": item.get("operations", []),
                 }
             history.append({
-                "run": run["request_id"], "operation": run["operation"], "definition_sha256": run["definitions_sha256"],
+                "run": run["request_id"], "operation": "tdd-baseline" if baseline else run["operation"],
+                "record": run["record"], "recorded_at": run["recorded_at"],
+                "product_version": run.get("product_version") or run.get("revision"),
+                "bindings": run["bindings"],
+                "definition_sha256": run["definitions_sha256"],
                 "selection": run.get("selection", "historical"), "cases": run_cases,
             })
             if result.get("mode") == "development":
                 expected.update(run["cases"])
                 for case, details in run["cases"].items():
-                    case_design[case] = details
+                    case_design[case] = {**case_design.get(case, {}), **details}
             if applicable:
                 fresh_cases.update(run_cases)
                 if dashboard:
                     current_runs.update(dict.fromkeys(run_cases, run["request_id"]))
+                    current_attempts.update(dict.fromkeys(run_cases, run["record"]))
                 expected.update(run.get("designed_case_ids", run_cases))
                 checklist = run.get("obligations") or checklist
         for case in expected - fresh_cases.keys():
@@ -166,15 +186,29 @@ def view(project, identifier, selected=None, *, dashboard=False):
         complete = bool(checklist and fresh_cases) and not missing and all(item["status"] == "passed" for item in fresh_cases.values())
         scene_status = "passed" if complete else "definition_changed" if scene in invalidated else "not_fully_validated"
         if result.get("mode") == "development":
-            green = {case for attempt in history if attempt["operation"] == "tdd-green"
-                     for case, item in attempt["cases"].items() if item["status"] == "passed"}
-            scene_status = "tdd_verified" if green and green == expected else "tdd_in_progress"
+            outcomes = {item["status"] for item in fresh_cases.values()}
+            scene_status = ("tdd_baseline_verified" if outcomes == {"baseline_passed"} else
+                            "tdd_verified" if "passed" in outcomes and outcomes <= {"passed", "baseline_passed"} else
+                            "tdd_in_progress")
         result["scenes"][scene] = {
             "definition": definition, "cases": fresh_cases, "history": history, "missing_obligations": missing,
-            "status": scene_status,
+            "status": scene_status, "case_design": case_design,
         }
         if dashboard:
-            result["scenes"][scene].update(case_design=case_design, current_runs=current_runs)
+            result["scenes"][scene].update(current_runs=current_runs, current_attempts=current_attempts)
+    requirement_results = {}
+    for requirement in current["requirements"]:
+        scene_ids = [name for name, item in current["scenarios"].items()
+                     if requirement in item["requirement_sha256"]]
+        states = {name: result["scenes"].get(name, {}).get("status") for name in scene_ids}
+        development_mode = result.get("mode") == "development"
+        valid = {"tdd_verified", "tdd_baseline_verified"} if development_mode else {"passed"}
+        if requirement in reviews and states and all(state in valid for state in states.values()):
+            status = "tdd_verified" if development_mode else "passed"
+        else:
+            status = "not_fully_validated"
+        requirement_results[requirement] = {"status": status, "scenes": states, "scope_reviewed": requirement in reviews}
+    result["requirement_results"] = requirement_results
     return result
 
 
@@ -236,7 +270,8 @@ def render(snapshot, files):
         content.append("</ul></details>")
         rows.append("<section>" + "".join(content) + "</section>")
     requirements = "".join(
-        f"<details><summary>{escape(name)}</summary><pre>{escape(item['source']['text'])}</pre></details>"
+        f"<details><summary>{escape(name)} · {escape(labels.get(snapshot.get('requirement_results', {}).get(name, {}).get('status'), '尚未完成验收'))}</summary>"
+        f"<pre>{escape(item['source']['text'])}</pre></details>"
         for name, item in sorted(snapshot.get("requirements", {}).items())
     )
     identifier = escape(snapshot["acceptance_id"])
@@ -312,7 +347,7 @@ def inventory_snapshot(project):
     return {"mode": "inventory", "inventory": read_json(path) if path.is_file() else None, "evidence": {}}
 
 
-def serve(project, identifier, port=0):
+def serve(project, identifier, port=0, phase=None):
     if identifier is not None:
         project.manifest(identifier)
     assets = Path(__file__).resolve().with_name("dashboard")
@@ -325,7 +360,7 @@ def serve(project, identifier, port=0):
                     response = (assets / name).read_bytes()
                 else:
                     snapshot = (inventory_snapshot(project) if identifier is None
-                                else view(project, identifier, dashboard=True))
+                                else view(project, identifier, dashboard=True, phase=phase))
                     if self.path == "/snapshot.json":
                         snapshot["evidence_urls"] = {name: f"/evidence/{digest(name.encode())}" for name in snapshot["evidence"]}
                         response = encoded(snapshot)
@@ -373,13 +408,16 @@ def main():
     parser.add_argument("operation", choices=["view", "report", "serve", "serve-inventory"])
     parser.add_argument("id", nargs="?", type=acceptance_id)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--phase", choices=["development", "acceptance"])
     args = parser.parse_args()
     if (args.operation == "serve-inventory") != (args.id is None):
         parser.error("an acceptance ID is required except with serve-inventory")
+    if args.phase and args.operation != "serve":
+        parser.error("--phase is for the acceptance dashboard")
     try:
         project = Project(args.root)
         if args.operation in {"serve", "serve-inventory"}:
-            serve(project, args.id, args.port)
+            serve(project, args.id, args.port, args.phase)
             return 0
         result = view(project, args.id) if args.operation == "view" else export_report(project, args.id, json.load(sys.stdin))
     except (Blocked, KeyError, TypeError, ValueError, OSError) as error:
