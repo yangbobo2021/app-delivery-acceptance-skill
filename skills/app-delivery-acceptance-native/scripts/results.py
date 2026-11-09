@@ -342,9 +342,67 @@ DASHBOARD_ASSETS = {
 }
 
 
+INVENTORY_STATUSES = {"verified", "failed", "recheck", "untested", "unconfirmed",
+                      "source_missing", "conflict", "blocked"}
+
+
+def save_inventory(project, report):
+    """Validate the complete user-selected scope before replacing the dashboard report."""
+    path = project.path(".acceptance-local", "native-v1", "inventory.json")
+    require_text(report["revision"], "inventory revision")
+    scope = report["scope"]
+    items = report["items"]
+    if not isinstance(scope, list) or not isinstance(items, list):
+        raise Blocked("inventory needs a scope list and an items list")
+    expected = {require_text(item, "inventory requirement id") for item in scope}
+    if len(expected) != len(scope) or report.get("candidates"):
+        raise Blocked("declare unique scope IDs and place all findings, including candidates, in items")
+    ids, covered = set(), set()
+    with project.writer():
+        for item in items:
+            key = require_text(item["id"], "inventory item id")
+            if key in ids:
+                raise Blocked(f"duplicate inventory item: {key}")
+            ids.add(key)
+            covered.add(require_text(item["requirement"], "inventory requirement id"))
+            if item["status"] not in INVENTORY_STATUSES:
+                raise Blocked(f"invalid inventory status: {key}")
+            if not isinstance(item["sources"], list) or not item["sources"]:
+                raise Blocked(f"inventory item needs sources: {key}")
+            for source in item["sources"]:
+                require_text(source, "inventory source")
+            require_text(item["next"], "inventory next step")
+            if not isinstance(item["cases"], list) or not isinstance(item["evidence"], list):
+                raise Blocked(f"inventory item needs cases and evidence lists: {key}")
+            for case in item["cases"]:
+                require_text(case["selector"], "inventory case selector")
+                require_text(case["source"], "inventory case source")
+            for name in item["evidence"]:
+                if not project.path(require_text(name, "inventory evidence path")).is_file() or name == project_ref(project, path):
+                    raise Blocked(f"inventory evidence must be a separate existing file: {name}")
+            if "command" in item or "exit_code" in item:
+                require_text(item["command"], "inventory recheck command")
+                if type(item["exit_code"]) is not int or not item["evidence"]:
+                    raise Blocked(f"inventory recheck needs its exit code and evidence: {key}")
+        if expected != covered:
+            raise Blocked(f"inventory scope mismatch: missing {sorted(expected - covered)}, extra {sorted(covered - expected)}")
+        data = encoded(report)
+        atomic_write(path, data)
+    return {"status": "inventory_saved", "report": project_ref(project, path), "sha256": digest(data),
+            "items": len(items), "scope": scope}
+
+
 def inventory_snapshot(project):
     path = project.path(".acceptance-local", "native-v1", "inventory.json")
-    return {"mode": "inventory", "inventory": read_json(path) if path.is_file() else None, "evidence": {}}
+    inventory = read_json(path) if path.is_file() else None
+    if inventory and inventory.get("candidates"):
+        items = inventory["items"]
+        ids = {item["id"] for item in items}
+        inventory["items"] = items + [
+            {**item, "sources": item.get("sources") or ([item["source"]] if item.get("source") else [])}
+            for item in inventory["candidates"] if item["id"] not in ids
+        ]
+    return {"mode": "inventory", "inventory": inventory, "evidence": {}}
 
 
 def serve(project, identifier, port=0, phase=None):
@@ -405,13 +463,13 @@ def main():
     configure_io()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
-    parser.add_argument("operation", choices=["view", "report", "serve", "serve-inventory"])
+    parser.add_argument("operation", choices=["view", "report", "serve", "serve-inventory", "save-inventory"])
     parser.add_argument("id", nargs="?", type=acceptance_id)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--phase", choices=["development", "acceptance"])
     args = parser.parse_args()
-    if (args.operation == "serve-inventory") != (args.id is None):
-        parser.error("an acceptance ID is required except with serve-inventory")
+    if (args.operation in {"serve-inventory", "save-inventory"}) != (args.id is None):
+        parser.error("an acceptance ID is required except for inventory operations")
     if args.phase and args.operation != "serve":
         parser.error("--phase is for the acceptance dashboard")
     try:
@@ -419,7 +477,12 @@ def main():
         if args.operation in {"serve", "serve-inventory"}:
             serve(project, args.id, args.port, args.phase)
             return 0
-        result = view(project, args.id) if args.operation == "view" else export_report(project, args.id, json.load(sys.stdin))
+        if args.operation == "save-inventory":
+            result = save_inventory(project, json.load(sys.stdin))
+        elif args.operation == "view":
+            result = view(project, args.id)
+        else:
+            result = export_report(project, args.id, json.load(sys.stdin))
     except (Blocked, KeyError, TypeError, ValueError, OSError) as error:
         print(json.dumps({"status": "blocked", "reason": str(error)}, ensure_ascii=False))
         return 2

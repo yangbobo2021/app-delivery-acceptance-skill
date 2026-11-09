@@ -21,7 +21,7 @@
 | 操作 | 实际输入及停止点 |
 | --- | --- |
 | `manual` | `scene`、实际 `product_version`，可选 `match`；`cases` 是 TC ID 到实际动作数组。每项含 `action/expected/observed/performed_by/performed_at/receipt_reference/outcome/evidence`。最后一项是实际证据路径到 SHA-256 的映射。记录图像后请独立 Reviewer 实际查看。 |
-| `delivery-judge` | 完整选定 `requirement_ids`，独立 `reviewer_session` 和意见文件 `review_file`。Reviewer 基于 [结果视图](../results/entry.md) 和原始证据返回 `{"status":"passed","reason":"实际依据"}`，也可判 `blocked` 或 `failed`。缺同版证据时交付实际限制。 |
+| `delivery-judge` | 完整选定 `requirement_ids`，独立 `reviewer_session` 和意见文件 `review_file`。按[启动 Reviewer 前更新 PLAN](../execution/reviewer.md)，并分别保留需求结论条目。Reviewer 基于 [结果视图](../results/entry.md) 和原始证据返回 `{"status":"passed","reason":"实际依据"}`，也可判 `blocked` 或 `failed`。缺同版证据时交付实际限制。 |
 | `risk` | 选定 `scene`、实际非通过复审 `finding/finding_sha256`、用户接受原话 `user_quote/source_reference`、`remaining_impact`。保留原判定。 |
 | `knowledge` | 指定真实 `validated_receipt`，以及从它提炼的 `files` 路径到 Markdown 正文。附可移植的条件、操作和限制，并从 `INDEX.md` 链接全部文档。 |
 | `backfill` | 用户允许的 `authorized_paths` 及 `files` 候选映射，每项含 `base_sha256` 和拟提交 `text`。返回差异与候选文件供核对。 |

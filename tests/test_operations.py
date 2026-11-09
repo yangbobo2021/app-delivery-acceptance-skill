@@ -178,6 +178,40 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(green["cases"], red["cases"])
         self.assertEqual(green["regression"]["exit_code"], 0)
         self.review_attempt(green, "green-review", {"status": "passed"})
+        source = self.record("source", "check_new.py", "1", "2")
+        match_request = {
+            "request_id": "formal-match", "scene": "SC1", "search_scope": "reuse the legacy TDD case",
+            "inspected": {"check_new.py": source["sha256"]},
+            "obligations": [{"id": "reject", "quote": "第二次响应 JSON status 必须为 409"}],
+            "cases": [{"selector": "check_new.py", "source": source, "status": "active", "covers": {},
+                       "tdd_case": {"green": "green", "case_id": "TC-verified"}}],
+        }
+        matched = self.operation("match", match_request)
+        self.assertEqual(list(matched["cases"]), ["TC-verified"])
+        self.assertEqual(matched["cases"]["TC-verified"]["tdd_case"]["record"], green["record"])
+        test.write_bytes(original + b"# changed since green\n")
+        changed = self.record("source", "check_new.py", "1", "2")
+        blocked = self.operation("match", {
+            **match_request, "request_id": "formal-match-changed",
+            "inspected": {"check_new.py": changed["sha256"]},
+            "cases": [{**match_request["cases"][0], "source": changed}],
+        }, expected_code=2)
+        self.assertIn("current test bytes", blocked["reason"])
+
+    def test_inventory_rejects_partial_scope_without_replacing_saved_report(self):
+        report = {"revision": "fixture-head", "scope": ["R1", "R2"], "items": [
+            {"id": "SC1", "requirement": "R1", "status": "untested", "sources": ["requirements.md"],
+             "cases": [], "evidence": [], "next": "待执行"},
+            {"id": "R2", "requirement": "R2", "status": "unconfirmed", "sources": ["scenarios.md"],
+             "cases": [], "evidence": [], "next": "待确认"},
+        ]}
+        saved = self.run_json("results.py", ["save-inventory"], report, 0)
+        path = self.root / saved["report"]
+        self.assertEqual(json.loads(path.read_bytes()), report)
+        original = path.read_bytes()
+        missing = self.run_json("results.py", ["save-inventory"], {**report, "items": report["items"][:1]}, 2)
+        self.assertIn("missing ['R2']", missing["reason"])
+        self.assertEqual(path.read_bytes(), original)
 
     def test_runtime_requires_actual_exit_and_reuses_valid_receipt(self):
         runtime = self.runtime()

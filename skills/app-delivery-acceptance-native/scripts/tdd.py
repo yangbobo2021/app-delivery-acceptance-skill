@@ -3,7 +3,26 @@ import os
 
 from casework import bound_attempt, coverage_policy, evidence_files, run_cases
 from evidence import argv, capture, file_bindings, upstream, verify_bindings
-from records import Blocked, atomic_write, token
+from records import Blocked, acceptance_id, atomic_write, token
+
+
+def match_tdd_case(project, identifier, definitions, scene, source, reference):
+    """Reuse a TDD identity only when its recorded test and frozen scene still match."""
+    origin = acceptance_id(reference.get("acceptance_id", identifier))
+    case_id = token(reference["case_id"], "TDD case id")
+    receipt, sha = bound_attempt(project, origin, "tdd-green", reference["green"], "green_observed")
+    prior_scene = next((version["scenarios"].get(scene) for _, digest, version in project.versions(origin)
+                        if digest == receipt["definitions_sha256"]), None)
+    case = receipt["cases"].get(case_id)
+    if (receipt["acceptance_id"] != origin or receipt["scene"] != scene
+            or prior_scene != definitions["scenarios"][scene] or case is None
+            or source["path"] not in case["files"]
+            or receipt["test_bindings"].get(source["path"]) != source["sha256"]):
+        raise Blocked("TDD case needs a matching scene, test file, and current test bytes")
+    if case.get("source") and case["source"] != source:
+        raise Blocked("selected declaration differs from the TDD case source")
+    verify_bindings(project, receipt["artifacts"])
+    return case_id, {"record": receipt["record"], "sha256": sha}
 
 
 def fresh_python_environment(path):
@@ -36,6 +55,11 @@ def red(project, identifier, request, definitions, path):
         raise Blocked("case ids must start with TC-")
     case = {"command": argv(request["command"]), "files": request["test_files"]}
     tests = file_bindings(project, case["files"])
+    if "source" in request:
+        source = project.verified_source(request["source"])
+        if source["kind"] != "file" or tests.get(source["path"]) != source["sha256"]:
+            raise Blocked("TDD case source must be among the bound test files")
+        case["source"] = source
     if product.keys() & tests.keys():
         raise Blocked("product and test files must be distinct")
     result = run(project, request, path, runtime, coverage, product, {case_id: case}, tests)

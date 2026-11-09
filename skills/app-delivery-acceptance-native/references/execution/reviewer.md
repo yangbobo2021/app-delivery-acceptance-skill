@@ -1,5 +1,7 @@
 # 独立 Reviewer
 
+每次启动 Reviewer 前先单独调用 `update_plan`，等工具返回后再调用 `spawn_agent`。当前条目须写本次复审的实际需求、场景、用例和版本或收据，动作标明「设计复审」「执行复审」或「需求交付复审」。例如「R1 › SC1 › TC-A · 设计复审 v2」。同一 Reviewer 负责多个对象时，在进行中条目列出其实际范围。PLAN 的待办继续保留其他用例与逐需求交付结论。各条需求的结论收到后分别勾选，末版 PLAN 保留这些已完成条目和旧轮次结论。
+
 主 Agent 使用宿主的原生子 Agent 调用，启动一位新上下文的 Reviewer，等待实际返回。Codex 的 `spawn_agent` 必须明确传 `fork_turns: "none"`。交接只提供任务、文件路径和需要核对的事实，不提供主 Agent 的判断或完整会话。Reviewer 对项目资料和证据只读，只能写自己本轮的意见文件。交接真实验收 ID、冻结需求和场景、项目测试约定、实际用例 ID、源码及候选版本、对应执行或调试结果和证据。需要图像判断时让 Reviewer 实际查看相关图片。以原始材料判断，独立确认每个 TC 的覆盖边界和原始证据。
 
 先为这一轮选定 `review-v1` 等唯一请求 ID。先创建意见目录，向 Reviewer 提供仓库根路径和完整目标文件路径。请 Reviewer 自己写入 `.acceptance-local/native-v1/<AT-ID>/review-inbox/<请求ID>.json`，并报告写入结果。使用真实 JSON，每个实际 TC 有一项：

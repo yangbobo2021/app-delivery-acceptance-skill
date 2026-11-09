@@ -12,7 +12,7 @@ from coverage_adapter import project_measure
 from coverage_python import measure_python, recompute
 from evidence import argv, capture, file_bindings, project_ref, recorded, upstream, verify_bindings
 from lifecycle import RECORDED
-from tdd import green, red
+from tdd import green, match_tdd_case, red
 from records import Blocked, Project, acceptance_id, configure_io, digest, require_text, token
 
 
@@ -56,11 +56,21 @@ def match(project, identifier, request, definitions, path):
         if len(markers) > 1:
             raise Blocked("case selection spans multiple permanent case ids")
         identity = next(iter(markers), None)
+        provenance = None
+        if "tdd_case" in entry:
+            if kind != "automated":
+                raise Blocked("TDD identity applies to an automated test")
+            prior_id, provenance = match_tdd_case(project, identifier, definitions, request["scene"], source, entry["tdd_case"])
+            if identity and identity != prior_id:
+                raise Blocked("test source marker conflicts with the TDD case id")
+            identity = prior_id
         if identity is None:
             identity = f"TC-{uuid.uuid5(uuid.NAMESPACE_URL, source['path'] + ':' + selector)}"
         if identity in cases:
             raise Blocked(f"duplicate case id: {identity}")
         cases[identity] = {"source": source, "selector": selector, "status": status, "covers": references}
+        if provenance:
+            cases[identity]["tdd_case"] = provenance
         if kind == "manual":
             cases[identity]["kind"] = kind
         if status == "active":

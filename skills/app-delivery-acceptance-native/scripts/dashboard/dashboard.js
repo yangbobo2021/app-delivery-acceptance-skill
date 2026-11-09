@@ -390,7 +390,14 @@ function renderInventory() {
       } else {
         cases.textContent = item.cases ? "未找到关联用例" : "未记录用例关联";
       }
-      row.append(element("td", (item.evidence ?? []).join("、") || "无适用执行证据"));
+      const evidence = row.appendChild(element("td"));
+      if (item.command) evidence.append(element("p", item.command), element("p", "退出码 " + item.exit_code, "muted"));
+      if (item.evidence?.length) {
+        const list = evidence.appendChild(element("ul"));
+        for (const path of item.evidence) list.append(element("li", path));
+      } else {
+        evidence.append(element("p", "无适用执行证据"));
+      }
       const state = row.appendChild(element("td"));
       state.append(status(item.status));
       if (item.reason) state.append(element("p", item.reason, "muted"));

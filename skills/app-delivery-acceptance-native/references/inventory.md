@@ -6,8 +6,24 @@
 
 按[场景范围](definitions/entry.md#交付场景推导)分支。有当前范围的 TDD 场景补齐和用例管理记录时，沿用其场景、用例身份和来源。逐场景核对并展示已有结论、用例及证据适用性。无这类场景范围记录时，先冻结已有需求和验收点，再逐需求补齐，之后逐场景核查用例和证据。盘点新写入的冻结定义、补充场景与报告属于盘点材料。
 
-按场景增量保存报告并逐项截图核对。给每项独立 `id`、关联的 `requirement`（需求 ID）和 `origin`（「规约验证点」或「补充场景」）。用 `sources` 保留范围和关联依据，用 `reason` 说明触发条件、期望和证据适用性。
+盘点开始时按 README 和用户范围列出全部对象的需求 ID，保留在 `scope`。范围内的待确认、依据缺失和冲突也分别作为 `items` 的行，写明实际出处和状态。部分复跑只更新受影响行，仍交付全部盘点对象。按场景逐项核对和截图。给每项独立 `id`、关联的 `requirement`（需求 ID）和 `origin`（「规约验证点」或「补充场景」）。用 `sources` 保留范围和关联依据，用 `reason` 说明触发条件、期望和证据适用性。
 
 每个场景填写 `cases`。逐项写入实际测试或人工步骤定位 `selector` 和来源 `source`，以输入和判据确认关联。有既有验证项 ID 时填写 `id` 并原样沿用。逐验证项说明执行收据及其适用性。若已核查且未找到适用验证项，填 `[]`。
 
-结构化报告可用 `{"revision":"当前完整 Git HEAD","items":[{"id":"场景 ID","status":"untested","sources":["实际依据路径"],"cases":[{"selector":"实际测试定位","source":"测试文件及声明行"}],"static_findings":["从代码或测试定义观察到的事实"],"evidence":[],"next":"下一步或已交付说明"}]}`。`evidence` 只放实际执行收据或日志路径。只读盘点没有可核验的执行记录时，该字段保留空数组。状态使用 `verified`、`failed`、`recheck`、`untested`、`unconfirmed`、`source_missing`、`conflict` 或 `blocked`。每项给出适用范围和实际原因，复验项另写实际命令及退出码。交付报告后按授权停止。
+把完整 JSON 通过 stdin 交给 [结果工具](../scripts/results.py) 的 `save-inventory`。对只授权读取并输出 `inventory.json` 的任务，这个输出文件就是允许写入的交付物。文件开始时不存在也按实际来源生成。看板直接读取工具返回的报告位置。用户明确指定其他输出位置时，按同一结构写入该位置。
+
+```sh
+python3 "<结果工具>" --root "<项目根>" save-inventory <<'JSON'
+{
+  "revision": "<实际完整 Git HEAD>",
+  "scope": ["R1"],
+  "items": [{
+    "id": "SC1", "requirement": "R1", "status": "untested",
+    "sources": ["实际依据路径"], "cases": [], "evidence": [],
+    "next": "实际下一步"
+  }]
+}
+JSON
+```
+
+状态可用 `verified`、`failed`、`recheck`、`untested`、`unconfirmed`、`source_missing`、`conflict`、`blocked`。实际复跑的行写入顶层 `command`、`exit_code` 和 `evidence`。证据指向独立留存的实际执行收据或原始输出文件。只读盘点没有适用历史证据时保留空数组。收到 `inventory_saved` 后读回报告，核对需求集合、场景行、证据路径和看板状态，再交付路径并停止。
