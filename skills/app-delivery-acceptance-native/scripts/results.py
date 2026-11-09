@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from evidence import local, project_ref, requirement_scope, verify_bindings, verify_checkout
-from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, token
+from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, require_text, token
 
 
 def attempts(project, identifier, section):
