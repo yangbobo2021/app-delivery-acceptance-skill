@@ -15,6 +15,8 @@
 
 已登记的人工验证项用 `manual <AT-ID>` 保存每次实际操作。提交新的 `request_id`、`scene`、`definitions_sha256`、对应 `match`、`product_version` 和 `product_files`。在 `cases` 下以原验证项 ID 列出实际操作，每项含 `action`、`expected`、`observed`、`performed_by`、`performed_at`、`receipt_reference`、`outcome` 以及 `evidence` 路径和 SHA-256。复核时沿用同一验证项 ID，为本次操作使用新请求 ID，并分别提交实际附件及复审。
 
+诊断类人工观察保留原始文案，并说明它表达的含义如何对应冻结预期。按语义判定，含义等价即满足文案检查。只有冻结要求明确指定语言或原文时，才额外核对该语言或原文。
+
 复核用户指定的历史收据时，先用 `history <AT-ID>` 冻结现有材料，输入 `request_id`、`scene`、`definitions_sha256`、实际 `receipt` 路径和对应 `case_id`。工具核对原收据中的输入及输出摘要，并保存副本。先独立评估这份历史，确认意见与授权后再动相关测试。历史通过也需要按真实范围和旧版本展示。
 
 | 复审结果 | 处置 |
