@@ -129,6 +129,7 @@ def debug(project, identifier, request, definitions, path):
         **({"purpose": "tdd-baseline"} if baseline else {}),
         "coverage_preparation": coverage["request_id"] if coverage else None,
         "coverage_basis": request.get("coverage_basis"),
+        "case_obligations": {name: sorted(matched["cases"][name]["covers"]) for name in cases if name in matched["cases"]},
         "obligations": matched["obligations"], "cwd": cwd, "revision": runtime.get("revision"),
         "artifacts": evidence_files(project, path),
     }
@@ -142,6 +143,28 @@ def bound_attempt(project, identifier, section, key, expected):
     if record["operation"] != section or record["status"] != expected:
         raise Blocked(f"invalid {section} attempt")
     return record, digest(raw)
+
+
+def case_obligations(project, identifier, target):
+    if "case_obligations" in target:
+        return target["case_obligations"]
+    if target["operation"] == "execute":
+        design = upstream(project, identifier, target, "design_review", "review", "reviewed")
+        return {name: finding.get("covers", []) for name, finding in design["judgments"].items()}
+    if target["operation"] in {"debug", "manual"}:
+        request_file = local(project, identifier, target["operation"], target["request_id"], "request.json")
+        raw = request_file.read_bytes()
+        if digest(raw) != target["request_sha256"]:
+            raise Blocked("attempt request differs from its recorded inputs")
+        request = json.loads(raw)
+        if request.get("match"):
+            matched = upstream(project, identifier, request, "match", "match", "matched", verify_live=False)
+            return {name: sorted(item["covers"]) for name, item in matched["cases"].items()}
+    return {}
+
+
+def coverage_within(covers, allowed):
+    return isinstance(covers, list) and all(isinstance(item, str) and item in allowed for item in covers)
 
 
 def review(project, identifier, request, definitions, path):
@@ -175,14 +198,18 @@ def review(project, identifier, request, definitions, path):
     judgments = json.loads(raw)["cases"]
     if set(judgments) != set(target["results"]):
         raise Blocked("Reviewer must return a judgment for every actual case")
+    assigned = case_obligations(project, identifier, target)
     for key, finding in judgments.items():
         require_text(finding["reason"], "review reason")
         if finding["status"] not in JUDGMENTS and not (
             section == "tdd-red" and finding["status"] == "expected_failure"
         ):
             raise Blocked("unrecognized review judgment")
-        if any(item not in target.get("obligations", {}) for item in finding.get("covers", [])):
+        covers = finding.get("covers", [])
+        if not coverage_within(covers, target.get("obligations", {})):
             raise Blocked("review coverage must reference declared scene obligations")
+        if key in assigned and not coverage_within(covers, assigned[key]):
+            raise Blocked(f"review coverage exceeds assigned obligations for {key}; request a corrected independent opinion")
         result = target["results"][key]
         if finding.get("design_status") is not None and (
             section != "debug" or finding["status"] != "product_defect" or finding["design_status"] != "valid"
@@ -230,6 +257,7 @@ def execute(project, identifier, request, definitions, path):
     verify_bindings(project, design["bindings"])
     return {
         "status": "executed", "results": results, "design_review": assessment["request_id"],
+        "case_obligations": {name: assessment["judgments"][name].get("covers", []) for name in selected},
         "obligations": design.get("obligations", {}), "designed_case_ids": sorted(design["cases"]),
         "selection": "all_designed_cases" if set(selected) == set(design["cases"]) else "selected_cases_only",
         "bindings": design["bindings"], "artifacts": evidence_files(project, path),
@@ -278,7 +306,7 @@ def manual(project, identifier, request, definitions, path):
             raise Blocked("manual matching belongs to a different scene")
         obligations = matched["obligations"]
         planned = {name: item for name, item in matched["cases"].items() if item.get("kind") == "manual"}
-    if planned and any(name not in planned or planned[name]["status"] != "active" for name in cases):
+    if request.get("match") and any(name not in planned or planned[name]["status"] != "active" for name in cases):
         raise Blocked("manual observation must use an active verification item from the scene")
     if planned and not request.get("product_files"):
         raise Blocked("manual verification needs the files of the observed product version")
@@ -310,5 +338,6 @@ def manual(project, identifier, request, definitions, path):
     return {
         "status": "observed", "results": result, "bindings": bindings,
         "product_version": product_version, "selection": "selected_cases_only", "obligations": obligations,
+        "case_obligations": {name: sorted(planned[name]["covers"]) for name in cases if name in planned},
         "artifacts": evidence_files(project, path),
     }

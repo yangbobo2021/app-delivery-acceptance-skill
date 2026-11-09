@@ -36,8 +36,8 @@ td li + li { margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf1f6; }
 .node:hover { background: transparent; text-decoration: underline; }
 .badge { display: inline-block; border-radius: 5px; padding: 2px 6px; background: #edf1f7; color: #394f68; font-size: .79rem; }
 .badge[data-status="passed"] { background: #e3f5ec; color: #17523f; }
-.badge[data-status="product_defect"], .badge[data-status="evidence_missing"] { background: #feece8; color: #923626; }
-.badge[data-status="pending_review"] { background: #fff1d5; color: #76510c; }
+.badge[data-status="product_defect"], .badge[data-status="evidence_missing"], .badge[data-status="failed"] { background: #feece8; color: #923626; }
+.badge[data-status="pending_review"], .badge[data-status="pending_delivery_review"], .badge[data-status="blocked"] { background: #fff1d5; color: #76510c; }
 #detail { width: min(740px, calc(100% - 32px)); max-height: 88dvh; padding: 0; border: 1px solid #ccd9e4; border-radius: 14px; color: inherit; overflow: hidden; }
 #detail::backdrop { background: #17283e85; }
 .dialog-top { padding: 16px 20px; }

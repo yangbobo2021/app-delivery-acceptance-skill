@@ -3,6 +3,7 @@
 const labels = {
   passed: "通过", needs_revision: "需修订", not_fully_validated: "尚未完成验收",
   product_defect: "产品缺陷", pending_review: "待独立复审", definition_changed: "定义有变化",
+  pending_delivery_review: "待需求交付判定",
   not_executed: "未执行", no_case_receipt: "无单独执行记录", stale: "旧版本", evidence_missing: "证据缺失", historical: "历史记录",
   definition_conflict: "定义冲突", insufficient_evidence: "证据不足", skipped: "跳过",
   measured: "已采集", off: "关闭", unavailable: "未取得覆盖率", unknown: "未核对",
@@ -55,9 +56,12 @@ function readSnapshot(snapshot) {
   }
   for (const [id, item] of Object.entries(snapshot.requirements ?? {})) {
     const scope = snapshot.scope_reviews?.[id];
+    const outcome = snapshot.requirement_results?.[id];
+    const judgment = outcome?.delivery_judgment;
     requirements.set(id, add(key("requirement", id), {
       label: id, kind: "需求 / 规则", title: title(item.source, id), source: item.source, scope,
-      status: snapshot.requirement_results?.[id]?.status,
+      status: outcome?.status, reason: judgment?.reason, record: judgment?.record,
+      evidence: judgment ? [judgment.record] : [],
     }));
   }
   const connected = new Set();

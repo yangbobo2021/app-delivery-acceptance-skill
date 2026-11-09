@@ -225,6 +225,10 @@ class OperationsTests(unittest.TestCase):
         self.assertIn("changed", self.runtime(expected_code=2)["reason"])
 
     def test_formal_execution_uses_only_reviewed_current_cases_and_preserves_evidence(self):
+        self.operation("analyze", {
+            "request_id": "scope", "requirement_ids": ["R1"], "analysis": "核对 SC1 范围。",
+            "scope_review": {"baseline_sha256": self.freeze["sha256"], "scenario_ids": ["SC1"]},
+        })
         self.runtime()
         src = self.record("source", "tests/check_s1.py", "20", "27")
         matched = self.operation("match", {
@@ -282,6 +286,10 @@ class OperationsTests(unittest.TestCase):
         self.assertTrue(report["report"].startswith(".acceptance-local/"))
         snapshot_path = self.root / report["snapshot"]
         snapshot = json.loads(snapshot_path.read_text())
+        with self.subTest("scenes pass while the delivery judgment is missing"):
+            self.assertEqual(snapshot["requirement_results"]["R1"]["status"], "pending_delivery_review")
+            blocked = self.run_json("lifecycle.py", ["finish", self.id], {"request_id": "finish-missing"}, 2)
+            self.assertIn("missing requirement judgments", blocked["reason"])
         self.assertIn("独立复审", (self.root / report["report"]).read_text())
         for original_name, exported in snapshot["exported"].items():
             self.assertEqual((snapshot_path.parent / exported).read_bytes(), (self.root / original_name).read_bytes())
@@ -313,6 +321,7 @@ class OperationsTests(unittest.TestCase):
                     self.assertEqual(scene["status"], "passed")
                     self.assertEqual(scene["current_runs"][case_id], formal["request_id"])
                     self.assertEqual(scene["case_design"][case_id]["design_review"]["status"], "passed")
+                    self.assertEqual(live["requirement_results"]["R1"]["delivery_judgment"]["record"], delivered["record"])
                 first_evidence = next(iter(live["evidence"]))
                 with urllib.request.urlopen(url.rstrip("/") + live["evidence_urls"][first_evidence], timeout=5) as response:
                     self.assertEqual(hashlib.sha256(response.read()).hexdigest(), live["evidence"][first_evidence])
@@ -320,18 +329,43 @@ class OperationsTests(unittest.TestCase):
                     urllib.request.urlopen(url + ".acceptance/secret", timeout=5)
                 self.assertEqual(missing.exception.code, 404)
                 missing.exception.close()
+                failed_opinion = inbox / "delivery-fail.json"
+                failed_opinion.write_text('{"status":"failed","reason":"Independent fixture finding"}')
+                failed = self.operation("delivery-judge", {
+                    "request_id": "delivery-fail", "requirement_ids": ["R1"], "reviewer_session": "fixture-delivery-reviewer",
+                    "review_file": failed_opinion.relative_to(self.root).as_posix(),
+                })
+                with urllib.request.urlopen(url + "snapshot.json", timeout=5) as response:
+                    live = json.load(response)
+                self.assertEqual(live["scenes"]["SC1"]["status"], "passed")
+                self.assertEqual(live["requirement_results"]["R1"]["status"], "failed")
+                self.assertEqual(live["requirement_results"]["R1"]["delivery_judgment"]["record"], failed["record"])
             finally:
                 server.terminate()
                 server.wait(timeout=5)
-        (self.root / next(iter(formal["results"][case_id]["execution"]["output"]))).write_bytes(b"changed")
+        evidence_path = self.root / next(iter(formal["results"][case_id]["execution"]["output"]))
+        raw_evidence = evidence_path.read_bytes()
+        evidence_path.write_bytes(b"changed")
         changed = self.run_json("results.py", ["view", self.id], None, 0)
         self.assertEqual(changed["scenes"]["SC1"]["cases"][case_id]["status"], "evidence_missing")
         self.assertEqual(changed["scenes"]["SC1"]["status"], "not_fully_validated")
+        with self.subTest("changed evidence invalidates a prior requirement judgment"):
+            self.assertEqual(changed["requirement_results"]["R1"]["status"], "pending_delivery_review")
         self.assertEqual(json.loads(snapshot_path.read_text()), snapshot)
         self.assertIn(
             "changed",
             self.operation("execute", {**execution_request, "request_id": "formal", "design_review": "review-2"}, 2)["reason"],
         )
+        evidence_path.write_bytes(raw_evidence)
+        failed_report = self.run_json("results.py", ["report", self.id], {"request_id": "failed-report"}, 0)
+        failure_snapshot = json.loads((self.root / failed_report["snapshot"]).read_text())
+        finished = self.run_json("lifecycle.py", ["finish", self.id], {"request_id": "finish-failed"}, 0)
+        archived = json.loads((self.root / finished["record"]).read_text())["snapshot"]
+        for surface in (failure_snapshot, archived):
+            with self.subTest("failure overrides passing scenes"):
+                self.assertEqual(surface["scenes"]["SC1"]["status"], "passed")
+                self.assertEqual(surface["requirement_results"]["R1"]["status"], "failed")
+                self.assertEqual(surface["requirement_results"]["R1"]["delivery_judgment"]["record"], failed["record"])
 
     @unittest.skipUnless(COVERAGE_PYTHON, "install coverage.py or set ACCEPTANCE_COVERAGE_PYTHON")
     def test_coverage_verifies_product_subprocess_and_rejects_unobserved_line(self):
@@ -515,12 +549,15 @@ class OperationsTests(unittest.TestCase):
         })
         (self.root / "manual-check.md").write_text("# @case-id: TC-manual\n观察返回状态 409。\n")
         source = self.record("source", "manual-check.md", "2", "2")
-        self.operation("match", {
+        match = {
             "request_id": "manual-match", "scene": "SC1", "search_scope": "人工步骤",
             "inspected": {"manual-check.md": source["sha256"]},
             "obligations": [{"id": "reject", "quote": "第二次响应 JSON status 必须为 409"}],
             "cases": [{"selector": "观察返回状态", "source": source, "kind": "manual",
                        "status": "active", "covers": {"reject": "观察返回状态 409。"}}],
+        }
+        self.operation("match", {
+            **match, "obligations": [*match["obligations"], {"id": "state", "quote": "所有字段和值均不变"}],
         })
         product = self.root / "candidate.txt"
         product.write_text("candidate one")
@@ -537,22 +574,30 @@ class OperationsTests(unittest.TestCase):
                     "evidence": {evidence.name: hashlib.sha256(evidence.read_bytes()).hexdigest()},
                 }]},
             })
-            self.operation("review", {
+            review = {
                 "request_id": f"review-{run}", "scene": "SC1", "target_operation": "manual", "target": run,
                 "target_sha256": hashlib.sha256((self.root / result["record"]).read_bytes()).hexdigest(),
                 "reviewer_session": "fixture-reviewer",
                 "raw_review": json.dumps({"cases": {"TC-manual": {
                     "status": "passed", "reason": "409 was observed", "covers": ["reject"],
                 }}}),
-            })
+            }
+            if run == "first":
+                with self.subTest("reject coverage assigned to another check"):
+                    outside = json.loads(review["raw_review"])
+                    outside["cases"]["TC-manual"]["covers"].append("state")
+                    rejected = self.operation("review", {
+                        **review, "request_id": "review-outside", "raw_review": json.dumps(outside),
+                    }, 2)
+                    self.assertIn("assigned", rejected["reason"])
+                self.operation("match", {**match, "request_id": "manual-match-revised"})
+            self.operation("review", review)
         view = self.run_json("results.py", ["view", self.id], None, 0)
-        self.assertEqual(view["requirement_results"]["R1"]["status"], "passed")
         scene = view["scenes"]["SC1"]
         self.assertEqual(scene["case_design"]["TC-manual"]["kind"], "manual")
         self.assertEqual([row["run"] for row in scene["history"]], ["first", "second"])
         product.write_text("candidate two")
         view = self.run_json("results.py", ["view", self.id], None, 0)
-        self.assertEqual(view["requirement_results"]["R1"]["status"], "not_fully_validated")
         self.assertEqual([row["cases"]["TC-manual"]["status"] for row in view["scenes"]["SC1"]["history"]],
                          ["stale", "stale"])
 

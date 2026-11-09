@@ -10,6 +10,7 @@ import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from casework import case_obligations, coverage_within
 from evidence import local, project_ref, requirement_scope, verify_bindings, verify_checkout
 from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, require_text, token
 
@@ -44,6 +45,13 @@ def live_attempt(project, run):
         return False
 
 
+def delivery_basis(scenes):
+    return {
+        name: digest(encoded({key: scene[key] for key in ("status", "history", "missing_obligations")}))
+        for name, scene in scenes.items()
+    }
+
+
 def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     manifest = project.manifest(identifier)
     versions = project.versions(identifier)
@@ -54,7 +62,6 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     if selected is not None:
         if not isinstance(selected, list) or not selected or len(set(selected)) != len(selected) or not set(selected) <= scenes.keys():
             raise Blocked("provide actual, distinct frozen scene IDs")
-        scenes = {name: scenes[name] for name in selected}
     result = {
         "acceptance_id": identifier, "manifest": manifest,
         "definitions": {"version": current["version"], "sha256": current_sha},
@@ -83,6 +90,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     matched = [item for item, _ in attempts(project, identifier, "match") if item["status"] == "matched"]
     for scene, definition in scenes.items():
         fresh_cases, history, checklist, expected = {}, [], {}, set()
+        preview_cases = set()
         case_design, current_runs, current_attempts = {}, {}, {}
         for match in matched:
             if match["scene"] == scene and match["definitions_sha256"] == current_sha:
@@ -104,8 +112,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
                 for case, details in candidate["cases"].items():
                     case_design[case] = {**case_design.get(case, {}), **details, "debug": candidate["request_id"],
                                          "design_review": review["judgments"][case] if review else None}
-                expected.update(candidate["cases"])
-                checklist = candidate.get("obligations") or checklist
+                preview_cases.update(candidate["cases"])
                 break
         for run, sha in execution:
             baseline = run.get("purpose") == "tdd-baseline"
@@ -121,6 +128,15 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
             evidence_valid = intact(project, raw)
             review = next((item for item in reversed(opinions) if item["target_sha256"] == sha and item["target_operation"] == run["operation"]), None)
             review_valid = bool(review and intact(project, review["artifacts"]))
+            if applicable and review_valid:
+                try:
+                    assigned = case_obligations(project, identifier, run)
+                    review_valid = all(
+                        coverage_within(finding.get("covers", []), assigned.get(case, run.get("obligations", {})))
+                        for case, finding in review["judgments"].items()
+                    )
+                except (Blocked, OSError, ValueError):
+                    review_valid = False
             run_cases = {}
             for identifier_case, item in run["results"].items():
                 execution_receipt = item.get("execution")
@@ -150,7 +166,8 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
                     response = review["reviewer_response"]
                     attachments[response] = review["artifacts"][response]
                 attachments = {name: expected_sha for name, expected_sha in attachments.items() if intact(project, {name: expected_sha})}
-                result["evidence"].update(attachments)
+                if selected is None or scene in selected:
+                    result["evidence"].update(attachments)
                 run_cases[identifier_case] = {
                     "status": status, "review": verdict, "evidence": sorted(attachments),
                     "coverage": coverage.get("status", "unavailable"),
@@ -190,25 +207,52 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
             scene_status = ("tdd_baseline_verified" if outcomes == {"baseline_passed"} else
                             "tdd_verified" if "passed" in outcomes and outcomes <= {"passed", "baseline_passed"} else
                             "tdd_in_progress")
+        for case in preview_cases - fresh_cases.keys():
+            fresh_cases[case] = {"status": "not_executed", "evidence": [], "review": None, "coverage": "unavailable"}
         result["scenes"][scene] = {
             "definition": definition, "cases": fresh_cases, "history": history, "missing_obligations": missing,
             "status": scene_status, "case_design": case_design,
         }
         if dashboard:
             result["scenes"][scene].update(current_runs=current_runs, current_attempts=current_attempts)
+    development_mode = result.get("mode") == "development"
+    delivery = {}
+    if not development_mode:
+        basis = delivery_basis(result["scenes"])
+        for row, sha in attempts(project, identifier, "delivery-judge"):
+            if row["status"] != "judged" or row["definitions_sha256"] != current_sha:
+                continue
+            recorded = row.get("scene_evidence")
+            valid = (recorded is not None and all(basis.get(name) == value for name, value in recorded.items())
+                     and intact(project, row["artifacts"]))
+            for requirement in row["requirement_ids"]:
+                if valid:
+                    delivery[requirement] = (row, sha)
+                else:
+                    delivery.pop(requirement, None)
+
     requirement_results = {}
     for requirement in current["requirements"]:
         scene_ids = [name for name, item in current["scenarios"].items()
                      if requirement in item["requirement_sha256"]]
         states = {name: result["scenes"].get(name, {}).get("status") for name in scene_ids}
-        development_mode = result.get("mode") == "development"
-        valid = {"tdd_verified", "tdd_baseline_verified"} if development_mode else {"passed"}
-        if requirement in reviews and states and all(state in valid for state in states.values()):
-            status = "tdd_verified" if development_mode else "passed"
+        detail = {"scenes": states, "scope_reviewed": requirement in reviews}
+        if development_mode:
+            valid = {"tdd_verified", "tdd_baseline_verified"}
+            status = ("tdd_verified" if requirement in reviews and states and all(state in valid for state in states.values())
+                      else "not_fully_validated")
+        elif requirement in delivery:
+            row, sha = delivery[requirement]
+            status = row["judgment"]["status"]
+            detail["delivery_judgment"] = {**row["judgment"], "record": row["record"], "sha256": sha}
+            if selected is None or any(name in selected for name in scene_ids):
+                result["evidence"][row["record"]] = sha
         else:
-            status = "not_fully_validated"
-        requirement_results[requirement] = {"status": status, "scenes": states, "scope_reviewed": requirement in reviews}
+            status = "pending_delivery_review"
+        requirement_results[requirement] = {"status": status, **detail}
     result["requirement_results"] = requirement_results
+    if selected is not None:
+        result["scenes"] = {name: result["scenes"][name] for name in selected}
     return result
 
 
@@ -216,6 +260,7 @@ def render(snapshot, files):
     escape = lambda value: html.escape(str(value))
     labels = {
         "passed": "通过", "needs_revision": "需修订", "not_fully_validated": "尚未完成验收",
+        "failed": "失败", "blocked": "受阻", "pending_delivery_review": "待需求交付判定",
         "product_defect": "产品缺陷", "pending_review": "待独立复审", "definition_changed": "定义有变化",
         "not_executed": "未执行", "stale": "旧版本", "evidence_missing": "证据缺失",
         "historical": "导入的历史执行",
@@ -269,11 +314,18 @@ def render(snapshot, files):
                 content.append(f"<li>{escape(old['run'])} · {escape(case)} · {escape(verdict)} {evidence_links(item)}</li>")
         content.append("</ul></details>")
         rows.append("<section>" + "".join(content) + "</section>")
-    requirements = "".join(
-        f"<details><summary>{escape(name)} · {escape(labels.get(snapshot.get('requirement_results', {}).get(name, {}).get('status'), '尚未完成验收'))}</summary>"
-        f"<pre>{escape(item['source']['text'])}</pre></details>"
-        for name, item in sorted(snapshot.get("requirements", {}).items())
-    )
+    requirements = []
+    for name, item in sorted(snapshot.get("requirements", {}).items()):
+        detail = snapshot.get("requirement_results", {}).get(name, {})
+        verdict = labels.get(detail.get("status"), "尚未完成验收")
+        judgment = detail.get("delivery_judgment")
+        review = ""
+        if judgment:
+            record = judgment["record"]
+            link = f'<a href="{escape(files[record])}">判定收据</a>' if record in files else escape(record)
+            review = f"<p>{escape(judgment['reason'])} · {link}</p>"
+        requirements.append(f"<details><summary>{escape(name)} · {escape(verdict)}</summary>"
+                            f"<pre>{escape(item['source']['text'])}</pre>{review}</details>")
     identifier = escape(snapshot["acceptance_id"])
     version = escape((snapshot["definitions"] or {}).get("version", "未冻结"))
     return (
@@ -285,7 +337,7 @@ def render(snapshot, files):
         "a{color:#164ba5;margin-right:8px}pre{white-space:pre-wrap}summary{cursor:pointer}h1,h2{line-height:1.25}"
         "</style>"
         f"<main><h1>交付验收 · {identifier}</h1><p>冻结定义 v{version} · <a href=\"snapshot.json\">结果快照</a></p>"
-        f"<h2>冻结需求</h2>{requirements}{''.join(rows)}</main></html>\n"
+        f"<h2>冻结需求</h2>{''.join(requirements)}{''.join(rows)}</main></html>\n"
     )
 
 

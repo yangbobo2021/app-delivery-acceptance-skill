@@ -15,7 +15,7 @@ from pathlib import Path
 
 from evidence import capture, file_bindings, local, now, project_ref, publish_index, requirement_scope, scoped, upstream, verify_bindings
 from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, require_text, token
-from results import attempts, view
+from results import attempts, delivery_basis, view
 
 
 def analyze(project, identifier, request, definitions, path):
@@ -191,6 +191,7 @@ def delivery_judge(project, identifier, request, definitions, path):
     return {
         "status": "judged", "judgment": judgment, "requirement_ids": selected, "reviewer_session": reviewer,
         "scene_status": {name: scene["status"] for name, scene in selected_scenes.items()},
+        "scene_evidence": delivery_basis(selected_scenes),
         "artifacts": {project_ref(project, path / "reviewer.json"): digest(raw)},
     }
 
@@ -339,9 +340,12 @@ def finish(project, identifier, request):
                 raise Blocked("finish only the selected active acceptance")
             snapshot = view(project, identifier)
             unfinished = sorted(name for name, data in snapshot["scenes"].items() if data["status"] != "passed")
-            if not snapshot["scenes"] or unfinished:
-                require_text(request.get("allow_unfinished"), "explicit authorization for unfinished acceptance")
-            atomic_write(target, encoded({"request": request, "snapshot": snapshot, "unfinished": unfinished}))
+            requirements = snapshot.get("requirement_results", {})
+            pending = sorted(name for name, data in requirements.items() if "delivery_judgment" not in data)
+            if not requirements or pending:
+                require_text(request.get("allow_unfinished"), "explicit authorization for missing requirement judgments")
+            atomic_write(target, encoded({"request": request, "snapshot": snapshot, "unfinished": unfinished,
+                                          "pending_requirements": pending}))
         if project.current() == identifier:
             project.path(".acceptance-local", "native-v1", "current.json").unlink()
     return {"status": "finished", "record": project_ref(project, target)}

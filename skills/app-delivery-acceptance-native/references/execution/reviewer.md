@@ -20,7 +20,7 @@
 {"cases":{"<TC-ID>":{"status":"needs_revision","reason":"实际观察到的具体问题与来源","covers":["实际支持的检查项 ID"]}}}
 ```
 
-可用结论为 `passed`、`needs_revision`、`product_defect`、`definition_conflict`、`insufficient_evidence`。`covers` 只列本尝试已声明且由证据支持的检查项。调试和正式执行分别判断。未看到独立意见、缺少实际图片或没有对应版本时，将待复审或阻塞如实记录。
+可用结论为 `passed`、`needs_revision`、`product_defect`、`definition_conflict`、`insufficient_evidence`。优先从目标收据的 `case_obligations[TC-ID]` 读取分配项。`covers` 只列这些分配项中有证据支持的部分。其他检查的原始事实可以写在 `reason`，覆盖归属仍以分配项为准。新增用例在独立设计复审时根据实际断言确定检查项，正式执行沿用该设计结论。工具拒绝越界认领时，请原 Reviewer 用新请求 ID 出具修正意见，保留原文件。未看到独立意见、缺少实际图片或没有对应版本时，将待复审或阻塞如实记录。
 
 判断创建与持久化场景时，核对候选用例是否用场景里的独立预期断言了首次写入值。典型的房间、时间、标题需要逐字段核对。若代码仅比较创建返回和随后查询返回的两个产品观察，即使两者都一致，也应把缺少独立预期判为 `needs_revision`，明确指出实际漏掉的字段和位置。
 
@@ -37,3 +37,9 @@
 在 `debug` 中，若用例和证据有效、失败已确认来自产品，同时写 `"status":"product_defect","design_status":"valid"`。这允许同版测试进入正式执行。正式执行复审按实际产品结论使用 `product_defect`，省略 `design_status`。
 
 目标操作可为 `debug`、`execute`、`history`、`manual`、`tdd-red` 或 `tdd-green`。`tdd-red` 只在实际日志证明测试因冻结需求对应的行为缺失而失败时使用 `expected_failure`。环境错误、测试错误和错误预期要分别说明，均不得授予 `expected_failure`。记录工具核对证据、实际用例集、版本和返回格式。主 Agent 依据宿主真实父子会话轨迹确认独立身份，按返回原样保存。
+
+## 需求级交接
+
+单独用 `spawn_agent` 加 `fork_turns: "none"` 启动需求级 Reviewer。一次可交接多条需求，用各自的请求 ID 和文件写意见。设计或执行 Reviewer 的上下文属于前一阶段。
+
+按需求交接冻结原文、选定范围、相关场景、实际用例与人工记录、执行复审收据、同版证据入口及已知缺口。有源码且可能用于说明覆盖范围时，附实际候选文件路径和版本。Reviewer 核对每条需求的完整范围，说明实测覆盖到哪里。其余范围若由同版实现或其他证据支持，引用实际材料并说明为何能推出结论。证据不足时判 `blocked` 并指出缺口。确认行为与要求相违时判 `failed` 并指出证据。符合范围且证据充分时判 `passed`。

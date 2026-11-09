@@ -35,5 +35,5 @@
 
 - `archive` 接收 `request_id` 和明确的 `files`（项目相对路径到 SHA-256）。仅选定本验收可共享的结果和附件，交付保留原字节的 ZIP 及清单。
 - `recover` 接收 `operation`、`attempt`、`action`。先用 `inspect`。已存在有效结果时复用。处理中断时核对进程和外部副作用；实际核对后才可用 `reconcile` 或 `supersede`，传 `external_effects` 的实际 `status`（`none_proved` 或 `reconciled`）与 `basis`。仍活动或没有可靠阶段结果时说明具体阻塞。新执行使用新请求 ID。
-- `finish` 接收 `request_id`。如实际未完成，另保存用户明确允许结束的 `allow_unfinished` 原话。先保存结果，再清除匹配的当前指针。
+- `finish` 接收 `request_id`，从结果视图读取当前有效的逐需求判定，保留通过、失败和受阻。缺有效判定时，只有提供用户明确允许结束的 `allow_unfinished` 原话才能收尾。旧判定缺少场景证据绑定时保留原收据，重新取得当前判定后再收尾。先保存快照，再清除匹配的当前指针。
 - `cleanup` 接收 `request_id`、实际 `authorization`、已验证的 `archive/archive_sha256` 和允许清理的本机 `files` 路径列表。工具先核对已归档字节、非活动状态和范围，再清理指定文件。按用户要求停止。
