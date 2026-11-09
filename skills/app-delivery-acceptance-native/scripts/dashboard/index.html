@@ -16,6 +16,10 @@
         <p id="version" class="muted">正在读取当前验收</p>
       </div>
       <div class="live-controls">
+        <nav id="phase-nav" class="phase-nav" aria-label="验收阶段" hidden>
+          <a href="/?phase=acceptance" data-phase="acceptance">正式验收</a>
+          <a href="/?phase=development" data-phase="development">TDD 开发</a>
+        </nav>
         <span id="connection" role="status">正在连接</span>
         <button id="refresh" type="button">立即刷新</button>
       </div>

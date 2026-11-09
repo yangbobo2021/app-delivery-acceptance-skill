@@ -9,6 +9,7 @@ import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from casework import case_obligations, coverage_within
 from evidence import local, project_ref, requirement_scope, verify_bindings, verify_checkout
@@ -91,7 +92,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     for scene, definition in scenes.items():
         fresh_cases, history, checklist, expected = {}, [], {}, set()
         preview_cases = set()
-        case_design, current_runs, current_attempts = {}, {}, {}
+        case_design, current_runs, current_attempts, run_details = {}, {}, {}, {}
         for match in matched:
             if match["scene"] == scene and match["definitions_sha256"] == current_sha:
                 expected = set(match["cases"])
@@ -174,6 +175,17 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
                     "exit_code": execution_receipt.get("exit_code") if execution_receipt else None,
                     "coverage_statistics": statistics, "observations": item.get("operations", []),
                 }
+                if dashboard:
+                    details = {}
+                    if execution_receipt and execution_receipt.get("argv"):
+                        details["command"] = execution_receipt["argv"]
+                    if verdict:
+                        details["review"] = {
+                            "record": review["record"], "session": review.get("reviewer_session"),
+                            "recorded_at": review.get("recorded_at"),
+                        }
+                    if details:
+                        run_details.setdefault(run["record"], {})[identifier_case] = details
             history.append({
                 "run": run["request_id"], "operation": "tdd-baseline" if baseline else run["operation"],
                 "record": run["record"], "recorded_at": run["recorded_at"],
@@ -214,7 +226,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
             "status": scene_status, "case_design": case_design,
         }
         if dashboard:
-            result["scenes"][scene].update(current_runs=current_runs, current_attempts=current_attempts)
+            result["scenes"][scene].update(current_runs=current_runs, current_attempts=current_attempts, run_details=run_details)
     development_mode = result.get("mode") == "development"
     delivery = {}
     if not development_mode:
@@ -465,19 +477,28 @@ def serve(project, identifier, port=0, phase=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             try:
-                if self.path in DASHBOARD_ASSETS:
-                    name, content = DASHBOARD_ASSETS[self.path]
+                request = urlsplit(self.path)
+                if request.path in DASHBOARD_ASSETS:
+                    name, content = DASHBOARD_ASSETS[request.path]
                     response = (assets / name).read_bytes()
                 else:
+                    requested = parse_qs(request.query).get("phase", [])
+                    if requested and (len(requested) != 1 or requested[0] not in {"development", "acceptance"}):
+                        self.send_error(400, "Invalid acceptance phase")
+                        return
+                    selected_phase = requested[0] if requested else phase
+                    suffix = f"?phase={selected_phase}" if requested else ""
                     snapshot = (inventory_snapshot(project) if identifier is None
-                                else view(project, identifier, dashboard=True, phase=phase))
-                    if self.path == "/snapshot.json":
-                        snapshot["evidence_urls"] = {name: f"/evidence/{digest(name.encode())}" for name in snapshot["evidence"]}
+                                else view(project, identifier, dashboard=True, phase=selected_phase))
+                    if request.path == "/snapshot.json":
+                        snapshot["evidence_urls"] = {
+                            name: f"/evidence/{digest(name.encode())}{suffix}" for name in snapshot["evidence"]
+                        }
                         response = encoded(snapshot)
                         content = "application/json; charset=utf-8"
                     else:
                         original = next((name for name in snapshot["evidence"]
-                                         if self.path == f"/evidence/{digest(name.encode())}"), None)
+                                         if request.path == f"/evidence/{digest(name.encode())}"), None)
                         if original is None:
                             self.send_error(404)
                             return

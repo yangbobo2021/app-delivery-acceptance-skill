@@ -10,6 +10,9 @@ h2 { font-size: 1.15rem; }
 .masthead, .tools, .dialog-top, .notice { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
 .masthead { margin-bottom: 24px; }
 .live-controls, .filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+.phase-nav { display: flex; padding: 3px; border: 1px solid #dbe3ed; border-radius: 8px; background: white; font-size: .88rem; }
+.phase-nav a { padding: 4px 9px; border-radius: 5px; color: #405670; text-decoration: none; }
+.phase-nav a[aria-current] { color: #174d71; background: #e5f2f7; font-weight: 650; }
 #connection { color: #285d67; font-size: .86rem; align-self: center; }
 #connection[data-error] { color: #a53b24; }
 .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 10px; margin-bottom: 22px; }
@@ -24,12 +27,22 @@ button { cursor: pointer; }
 button:hover { background: #edf4fa; }
 :focus-visible { outline: 2px solid #147e9b; outline-offset: 2px; }
 .table-scroll { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; min-width: 880px; table-layout: fixed; }
-th, td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid #e1e7ef; overflow-wrap: anywhere; }
-th { background: #eef3f8; color: #3c5169; font-size: .88rem; }
-td { font-size: .91rem; }
+.table-scroll > table { border-collapse: collapse; width: 100%; min-width: 880px; table-layout: fixed; }
+.table-scroll th, .table-scroll td { text-align: left; vertical-align: top; padding: 10px 14px; border-top: 1px solid #e1e7ef; overflow-wrap: anywhere; }
+.table-scroll th { background: #eef3f8; color: #3c5169; font-size: .88rem; }
+.table-scroll td { font-size: .91rem; }
+.table-scroll:has(.verification-row) th:nth-child(1) { width: 17%; }
+.table-scroll:has(.verification-row) th:nth-child(2) { width: 18%; }
+.table-scroll:has(.verification-row) th:nth-child(3) { width: 26%; }
+.table-scroll:has(.verification-row) th:nth-child(4) { width: 25%; }
 .requirement-start:not(:first-child) > td { border-top: 2px solid #acbfd1; }
 td.requirement { background: #f5f8fb; border-right: 1px solid #e1e7ef; }
+.verification-row .scene { background: #fafbfd; border-right: 1px solid #e1e7ef; }
+.verification-row.scene-start:not(.requirement-start) > td { border-top-color: #c7d3e0; }
+.verification-row:hover > :is(.case, .run, .review) { background: #f4f8fc; }
+.verification-row .badge { margin-top: 4px; }
+.verification-row .run > .node + .badge { display: table; }
+.row-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 td ul, .relation-list { list-style: none; padding: 0; margin: 0; }
 td li + li { margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf1f6; }
 .node { padding: 0; border: 0; color: #184d81; text-align: left; font-weight: 650; overflow-wrap: anywhere; }
@@ -48,9 +61,26 @@ td li + li { margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf1f6; }
 [hidden] { display: none !important; }
 #detail-body { overflow: auto; max-height: 60dvh; border-top: 1px solid #e0e8ef; padding: 18px 20px; }
 #detail-body > * + * { margin-top: 12px; }
+#detail-body h3, #detail-body h4 { margin: 0; }
+.detail-section { border-top: 1px solid #e0e8ef; padding-top: 12px; }
+.detail-section > * + * { margin-top: 8px; }
+.frozen-text > * + * { margin-top: 8px; }
+.frozen-text h4:not(:first-child) { margin-top: 16px; }
+.frozen-text h4 { color: #263d5a; }
+.frozen-text ul { padding-left: 1.4rem; }
+.source-reference { color: #405670; font-family: ui-monospace, monospace; font-size: .87em; }
+.spec-table { overflow-x: auto; }
+.spec-table table { width: 100%; border-collapse: collapse; }
+.spec-table th, .spec-table td { border: 1px solid #dbe3ed; padding: 6px 9px; text-align: left; vertical-align: top; }
+.spec-table th { background: #eef3f8; }
+.checks { margin-bottom: 0; }
+.checks dt { color: #405670; font-weight: 650; }
+.checks dd { margin: 0 0 6px; overflow-wrap: anywhere; }
 pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; background: #f2f5f9; border-radius: 7px; }
 a { color: #184d81; }
+.relation-list .badge { margin-left: 8px; }
 .relation-list li + li { margin-top: 8px; }
+.evidence-list { padding-left: 1.4rem; overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   main { padding-top: 16px; }
   #detail { width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; border-radius: 0; }

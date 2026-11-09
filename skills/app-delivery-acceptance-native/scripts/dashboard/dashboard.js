@@ -15,7 +15,8 @@ const labels = {
 const get = id => document.getElementById(id);
 const detail = get("detail");
 const tabIds = ["overview", "relations", "sources"];
-const expanded = new Set();
+const phase = new URLSearchParams(window.location.search).get("phase");
+const snapshotUrl = phase === "development" || phase === "acceptance" ? "/snapshot.json?phase=" + phase : "/snapshot.json";
 let current, previousPayload, lastRead, busy = false;
 let reading, opener;
 const stack = [];
@@ -42,6 +43,11 @@ function title(source, fallback) {
   return first ? first.replace(/^(?:#{1,6}|[-*])\s+/, "").slice(0, 68) : fallback;
 }
 
+function summary(source) {
+  return source?.text?.split("\n").map(line => line.trim())
+    .find(line => line && !/^[#|]/.test(line))?.replace(/^[-*]\s+/, "");
+}
+
 function readSnapshot(snapshot) {
   const nodes = new Map();
   const groups = [];
@@ -59,7 +65,8 @@ function readSnapshot(snapshot) {
     const outcome = snapshot.requirement_results?.[id];
     const judgment = outcome?.delivery_judgment;
     requirements.set(id, add(key("requirement", id), {
-      label: id, kind: "需求 / 规则", title: title(item.source, id), source: item.source, scope,
+      label: id, kind: "需求 / 规则", type: "requirement", title: title(item.source, id), source: item.source, scope,
+      definition: snapshot.definitions,
       status: outcome?.status, reason: judgment?.reason, record: judgment?.record,
       evidence: judgment ? [judgment.record] : [],
     }));
@@ -67,7 +74,7 @@ function readSnapshot(snapshot) {
   const connected = new Set();
   for (const [id, scene] of Object.entries(snapshot.scenes)) {
     const sceneKey = add(key("scene", id), {
-      label: id, kind: "测试场景", title: title(scene.definition.source, id),
+      label: id, kind: "测试场景", type: "scene", title: title(scene.definition.source, id), definition: snapshot.definitions,
       source: scene.definition.source, status: scene.status, missing: scene.missing_obligations,
     });
     const parents = Object.keys(scene.definition.requirement_sha256).map(r => requirements.get(r)).filter(Boolean);
@@ -83,8 +90,8 @@ function readSnapshot(snapshot) {
       const history = scene.history.filter(r => r.cases[caseId]);
       const manual = design?.kind === "manual" || history.some(run => run.operation === "manual");
       const caseKey = add(key("case", id, caseId), {
-        label: caseId, kind: manual ? "人工验证项" : "用例 / 操作",
-        title: design?.selector ?? (snapshot.mode === "development" && design?.command ? design.command.join(" ") : caseId),
+        label: caseId, kind: manual ? "人工验证项" : "用例 / 操作", type: "case",
+        title: design?.selector?.trim() || caseId,
         source: design?.source, design, status: design?.status === "skipped" ? "skipped" : item?.status,
       });
       link(sceneKey, caseKey);
@@ -94,18 +101,20 @@ function readSnapshot(snapshot) {
       for (const run of history) {
         const observed = run.cases[caseId];
         const identity = run.record ?? run.run;
+        const details = scene.run_details?.[identity]?.[caseId];
         const runKey = add(key("run", id, caseId, identity), {
-          label: run.run, kind: "实际执行", title: caseId, status: observed.status, observed,
+          label: run.run, kind: "实际执行", type: "run", title: caseId, status: observed.status, observed,
           stage: {"tdd-red": "红灯", "tdd-green": "绿灯", "tdd-baseline": "基线"}[run.operation],
           version: run.definition_sha256, product: run.product_version, bindings: run.bindings,
-          record: run.record, recordedAt: run.recorded_at, evidence: observed.evidence,
+          record: run.record, recordedAt: run.recorded_at, evidence: observed.evidence, command: details?.command,
         });
         link(caseKey, runKey);
         let reviewKey;
         if (observed.review) {
           reviewKey = add(key("review", id, caseId, identity), {
-            label: caseId, kind: "独立复审", title: run.run, status: observed.review.status,
+            label: caseId, kind: "独立复审", type: "review", title: run.run, status: observed.review.status,
             reason: observed.review.reason, covers: observed.review.covers,
+            record: details?.review?.record, recordedAt: details?.review?.recorded_at, reviewer: details?.review?.session,
             evidence: observed.evidence.filter(name => name.endsWith("/reviewer.txt")),
           });
           link(runKey, reviewKey);
@@ -164,73 +173,70 @@ function renderTable() {
       sections.get(parent).push(group);
     }
   }
-  const total = [...sections.values()].reduce((count, groups) => count + groups.length, 0);
+  const total = [...sections.values()].reduce((count, groups) => count
+    + groups.reduce((subtotal, group) => subtotal + Math.max(1, group.cases.length), 0), 0);
   for (const [parent, groups] of sections) {
     const visible = groups.map(group => ({group, matches: matching(group, parent, query, filter)}))
       .filter(item => item.matches !== null);
+    const requirementRows = visible.reduce((count, item) => count + Math.max(1, item.matches.length), 0);
+    const requirement = parent ? current.nodes.get(parent) : null;
     for (const [index, {group, matches}] of visible.entries()) {
-      const tr = element("tr");
-      const requirement = parent ? current.nodes.get(parent) : null;
-      tr.dataset.requirement = requirement?.label ?? "";
-      if (index === 0) {
-        const cell = requirementCell(tr, visible.length);
-        if (requirement) {
-          cell.append(nodeButton(parent, requirement.label), element("p", requirement.title, "muted"));
-          if (requirement.status) cell.append(status(requirement.status));
-          if (requirement.scope) {
-            cell.append(element("p", "范围已核对 · 新增 " + requirement.scope.added_scenario_ids.length + " 条", "muted"));
+      const scene = group.id ? current.nodes.get(group.id) : null;
+      for (const [caseIndex, item] of (matches.length ? matches : [null]).entries()) {
+        const row = element("tr", undefined, "verification-row");
+        row.dataset.requirement = requirement?.label ?? "";
+        row.dataset.scene = scene?.label ?? "";
+        if (index === 0 && caseIndex === 0) {
+          const cell = requirementCell(row, requirementRows);
+          if (requirement) {
+            cell.append(nodeButton(parent, requirement.label));
+            cell.append(element("p", summary(requirement.source) ?? requirement.title, "row-summary muted"));
+            if (requirement.status) cell.append(status(requirement.status));
+          } else {
+            cell.textContent = "独立场景";
           }
-        } else {
-          cell.textContent = "独立场景";
         }
-      }
-      const [sceneCell, casesCell, runsCell, reviewsCell] = Array.from({length: 4}, () => tr.appendChild(element("td")));
-      if (!group.id) {
-        sceneCell.textContent = "尚无关联场景";
-      } else {
-        const node = current.nodes.get(group.id);
-        sceneCell.append(nodeButton(group.id, node.label), element("p", node.title, "muted"), status(group.status));
-      }
-      if (!matches.length) {
-        casesCell.textContent = "尚无关联用例";
-        runsCell.append(status(current.snapshot.mode === "development" ? "no_case_receipt" : "not_executed"));
-        reviewsCell.textContent = "尚无结论";
-      } else {
-        const lists = [casesCell, runsCell, reviewsCell].map(cell => cell.appendChild(element("ul")));
-        const showAll = expanded.has(group.id);
-        for (const item of showAll ? matches : matches.slice(0, 3)) {
+        if (caseIndex === 0) {
+          row.classList.add("scene-start");
+          const cell = row.appendChild(element("td", undefined, "scene"));
+          cell.rowSpan = Math.max(1, matches.length);
+          if (scene) {
+            cell.append(nodeButton(group.id, scene.label));
+            cell.append(element("p", summary(scene.source) ?? scene.title, "row-summary muted"), status(group.status));
+          } else {
+            cell.textContent = "尚无关联场景";
+          }
+        }
+        const [caseCell, runCell, reviewCell] = ["case", "run", "review"]
+          .map(name => row.appendChild(element("td", undefined, name)));
+        if (item) {
           const test = current.nodes.get(item.id);
-          lists[0].append(element("li"));
-          lists[0].lastElementChild.append(nodeButton(item.id, test.label));
-          if (test.title !== test.label) lists[0].lastElementChild.append(element("p", test.title, "muted"));
-          lists[0].lastElementChild.append(element("p", test.kind + " · " + item.attempts + " 次执行", "muted"));
-          const run = lists[1].appendChild(element("li"));
+          row.dataset.case = test.label;
+          caseCell.append(nodeButton(item.id, test.label));
+          if (test.title !== test.label) caseCell.append(element("p", test.title, "row-summary muted"));
+          caseCell.append(element("p", test.kind + " · " + item.attempts + " 次执行", "muted"));
           if (item.execution) {
             const node = current.nodes.get(item.execution);
-            run.append(nodeButton(item.execution, node.stage ? node.stage + " · " + node.label : node.label),
-              element("p", node.observed.exit_code == null ? test.label : test.label + " · 退出 " + node.observed.exit_code, "muted"));
+            runCell.append(nodeButton(item.execution, node.stage ? node.stage + " · " + node.label : node.label));
+            if (node.observed.exit_code != null) runCell.append(element("p", "退出码 " + node.observed.exit_code, "muted"));
           }
-          run.append(status(current.snapshot.mode === "development" && item.outcome === "not_executed"
+          runCell.append(status(current.snapshot.mode === "development" && item.outcome === "not_executed"
             ? "no_case_receipt" : item.outcome));
-          const review = lists[2].appendChild(element("li"));
           if (item.review) {
             const opinion = current.nodes.get(item.review);
             const verdict = opinion.status === "passed" && current.snapshot.mode === "development"
-              ? "绿灯复审通过" : labels[opinion.status];
-            review.append(nodeButton(item.review, verdict), element("p", test.label, "muted"));
+              ? "绿灯复审通过" : labels[opinion.status] ?? opinion.status;
+            reviewCell.append(nodeButton(item.review, verdict));
           } else {
-            review.textContent = item.outcome === "pending_review" ? "待独立复审" : "尚无结论";
+            reviewCell.textContent = item.outcome === "pending_review" ? "待独立复审" : "尚无结论";
           }
+        } else {
+          caseCell.textContent = "尚无关联用例";
+          runCell.append(status(current.snapshot.mode === "development" ? "no_case_receipt" : "not_executed"));
+          reviewCell.textContent = "尚无结论";
         }
-        if (matches.length > 3) {
-          const toggle = element("button", showAll ? "收起" : "查看全部 " + matches.length + " 项");
-          toggle.type = "button";
-          toggle.dataset.expand = group.id;
-          toggle.setAttribute("aria-expanded", String(showAll));
-          casesCell.append(toggle);
-        }
+        rows.push(row);
       }
-      rows.push(tr);
     }
   }
   get("count").textContent = "显示 " + rows.length + " / " + total + " 行";
@@ -274,6 +280,102 @@ function activeDetail() {
   return stack.at(-1);
 }
 
+function sourceLocation(source) {
+  return source.kind === "file"
+    ? source.path + " · 第 " + source.first + "–" + source.last + " 行"
+    : source.reference ?? "已冻结内容";
+}
+
+function prose(tag, value) {
+  const node = element(tag);
+  const tokens = /\[\[([^\]]+)\]\([^)]+\)\]|\[([^\]]+)\]\([^)]+\)|`([^`]+)`|\*\*([^*]+)\*\*/g;
+  let cursor = 0;
+  for (const match of value.matchAll(tokens)) {
+    node.append(value.slice(cursor, match.index));
+    if (match[3]) node.append(element("code", match[3]));
+    else if (match[4]) node.append(element("strong", match[4]));
+    else node.append(element("span", match[1] ?? match[2], "source-reference"));
+    cursor = match.index + match[0].length;
+  }
+  node.append(value.slice(cursor));
+  return node;
+}
+
+function frozenText(source) {
+  const result = element("div", undefined, "frozen-text");
+  const lines = source.text.split("\n").map(line => line.trim());
+  const heading = /^#{1,6}\s+(.+)/;
+  const bullet = /^[-*]\s+(.+)/;
+  const tableRule = /^\|(?:\s*:?-+:?\s*\|)+$/;
+  const cells = line => line.slice(1).replace(/\|$/, "").split("|").map(cell => cell.trim());
+  let list;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const item = line.match(bullet);
+    if (item) {
+      if (!list) list = result.appendChild(element("ul"));
+      list.append(prose("li", item[1]));
+      continue;
+    }
+    list = null;
+    if (!line) continue;
+    const label = line.match(heading);
+    if (label) {
+      result.append(prose("h4", label[1]));
+    } else if (line.startsWith("|") && tableRule.test(lines[i + 1] ?? "")) {
+      const scroller = result.appendChild(element("div", undefined, "spec-table"));
+      const table = scroller.appendChild(element("table"));
+      const header = table.createTHead().insertRow();
+      header.append(...cells(line).map(value => {
+        const th = prose("th", value);
+        th.scope = "col";
+        return th;
+      }));
+      const body = table.createTBody();
+      i++;
+      while (lines[i + 1]?.startsWith("|")) {
+        body.insertRow().append(...cells(lines[++i]).map(value => prose("td", value)));
+      }
+    } else {
+      result.append(prose("p", line));
+    }
+  }
+  return result;
+}
+
+function detailSection(body, heading) {
+  const section = body.appendChild(element("section", undefined, "detail-section"));
+  section.append(element("h3", heading));
+  return section;
+}
+
+function evidenceLinks(body, node) {
+  const items = (node.evidence ?? []).filter(name => reading.snapshot.evidence_urls?.[name]);
+  if (!items.length) return;
+  const section = detailSection(body, "原始证据");
+  const list = section.appendChild(element("ul", undefined, "evidence-list"));
+  for (const name of items) {
+    const link = element("a", name.split("/").at(-1));
+    link.href = reading.snapshot.evidence_urls[name];
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.title = name;
+    list.appendChild(element("li")).append(link);
+  }
+}
+
+function relationList(node) {
+  const list = element("ul", undefined, "relation-list");
+  for (const id of node.relations) {
+    const related = reading.nodes.get(id);
+    const item = list.appendChild(element("li"));
+    const name = [related.kind, related.stage, related.label].filter(Boolean).join(" · ");
+    item.append(nodeButton(id, name));
+    if (related.status) item.append(status(related.status));
+  }
+  return list.childElementCount ? list : element("p", "尚无关联记录");
+}
+
 function renderDetail() {
   const frame = activeDetail();
   const node = reading.nodes.get(frame.id);
@@ -288,19 +390,11 @@ function renderDetail() {
   body.setAttribute("aria-labelledby", frame.tab);
   body.replaceChildren();
   if (frame.tab === "relations") {
-    const list = element("ul", undefined, "relation-list");
-    for (const id of node.relations) {
-      const related = reading.nodes.get(id);
-      list.append(element("li"));
-      list.lastElementChild.append(nodeButton(id, related.kind + " · " + related.label));
-    }
-    body.append(list.childElementCount ? list : element("p", "尚无关联记录"));
+    body.append(relationList(node));
   } else if (frame.tab === "sources") {
     if (node.source) {
       const source = node.source;
-      body.append(element("p", source.kind === "file"
-        ? source.path + " · 第 " + source.first + "–" + source.last + " 行" : source.reference ?? "已冻结内容"),
-      element("pre", source.text));
+      body.append(element("p", sourceLocation(source)), element("pre", source.text));
       if (source.sha256) body.append(element("p", "SHA-256 " + source.sha256, "muted"));
     }
     if (node.design?.files) body.append(element("p", node.design.files.join("、")));
@@ -311,37 +405,56 @@ function renderDetail() {
     for (const [path, sha] of Object.entries(node.bindings ?? {})) {
       body.append(element("p", path + " · SHA-256 " + sha, "muted"));
     }
-    for (const name of node.evidence ?? []) {
-      const url = reading.snapshot.evidence_urls?.[name];
-      if (!url) continue;
-      const link = element("a", name.split("/").at(-1));
-      link.href = url;
-      link.target = "_blank";
-      link.rel = "noopener";
-      body.append(element("p"));
-      body.lastElementChild.append(link);
-    }
+    evidenceLinks(body, node);
     if (!body.childElementCount) body.append(element("p", "尚无依据或原始记录"));
   } else {
-    body.append(element("p", node.title));
     if (node.status) body.append(status(node.status));
-    if (node.reason) body.append(element("p", node.reason));
+    if (node.type === "requirement" || node.type === "scene") {
+      if (node.source) {
+        const section = detailSection(body, node.type === "requirement" ? "需求原文" : "场景原文");
+        section.append(element("p", sourceLocation(node.source) + (node.definition ? " · 冻结 v" + node.definition.version : ""), "muted"),
+          frozenText(node.source));
+      }
+    } else if (node.type === "case") {
+      if (node.title !== node.label) body.append(element("p", node.title));
+      if (node.source) {
+        const section = detailSection(body, node.kind === "人工验证项" ? "操作步骤与预期" : "用例源码");
+        section.append(element("p", sourceLocation(node.source), "muted"),
+          node.kind === "人工验证项" ? frozenText(node.source) : element("pre", node.source.text));
+      }
+      if (node.design?.covers && Object.keys(node.design.covers).length) {
+        const list = detailSection(body, "用例检查项").appendChild(element("dl", undefined, "checks"));
+        for (const [id, assertion] of Object.entries(node.design.covers)) {
+          list.append(element("dt", id), element("dd", assertion));
+        }
+      }
+    } else {
+      body.append(element("p", (node.stage ? node.stage + " · " : "") + node.title));
+    }
+    if (node.reason) detailSection(body, node.type === "requirement" ? "交付判定依据" : "复审意见").append(element("p", node.reason));
     if (node.scope) {
-      body.append(element("p", node.scope.analysis), element("p", node.scope.record, "muted"));
+      detailSection(body, "场景范围核对").append(element("p", node.scope.analysis), element("p", node.scope.record, "muted"));
     }
     if (node.missing?.length) body.append(element("p", "未取得通过证据的检查项 " + node.missing.join("、")));
     if (node.design?.design_review) {
       const review = node.design.design_review;
-      body.append(element("p", "设计复审 · " + (labels[review.status] ?? review.status) + " · " + review.reason));
+      detailSection(body, "设计复审").append(status(review.status), element("p", review.reason));
     }
+    if (node.reviewer) body.append(element("p", "Reviewer · " + node.reviewer, "muted"));
+    if (node.recordedAt) body.append(element("p", "记录时间 · " + node.recordedAt, "muted"));
+    if (node.product) body.append(element("p", "被测版本 · " + node.product, "muted"));
+    if (node.command) detailSection(body, "实际运行命令").append(element("pre", JSON.stringify(node.command)));
     if (node.observed) {
-      if (node.recordedAt) body.append(element("p", "记录时间 " + node.recordedAt, "muted"));
-      body.append(element("p", "退出码 " + (node.observed.exit_code ?? "无") + " · 覆盖率 " + labels[node.observed.coverage]));
+      if (node.observed.exit_code != null) body.append(element("p", "退出码 " + node.observed.exit_code + " · 覆盖率 " + (labels[node.observed.coverage] ?? node.observed.coverage)));
       for (const item of node.observed.observations ?? []) {
-        body.append(element("p", item.action + " · " + item.observed));
+        const section = detailSection(body, "人工观察");
+        section.append(element("p", item.action), element("p", "预期 · " + item.expected),
+          element("p", "实际 · " + item.observed), element("p", [item.performed_at, item.performed_by].filter(Boolean).join(" · "), "muted"));
       }
     }
     if (node.covers?.length) body.append(element("p", "已复审检查项 " + node.covers.join("、")));
+    evidenceLinks(body, node);
+    if (node.relations.size) detailSection(body, node.type === "requirement" ? "关联场景" : "关联记录").append(relationList(node));
   }
   body.scrollTop = frame.scroll;
 }
@@ -429,7 +542,7 @@ async function refresh() {
   busy = true;
   const connection = get("connection");
   try {
-    const response = await fetch("/snapshot.json", {cache: "no-store", signal: AbortSignal.timeout(4500)});
+    const response = await fetch(snapshotUrl, {cache: "no-store", signal: AbortSignal.timeout(4500)});
     if (!response.ok) throw new Error("HTTP " + response.status);
     const payload = await response.text();
     if (previousPayload !== payload) {
@@ -454,7 +567,12 @@ async function refresh() {
       } else {
         document.title = snapshot.acceptance_id + " · 验收追踪";
         get("acceptance").textContent = snapshot.acceptance_id;
-        const prefix = snapshot.mode === "development" ? "测试驱动开发 · " : "";
+        const prefix = snapshot.mode === "development" ? "测试驱动开发 · " : "正式验收 · ";
+        const phaseNav = get("phase-nav");
+        const currentPhase = snapshot.mode === "development" ? "development" : "acceptance";
+        phaseNav.hidden = false;
+        phaseNav.querySelector("[aria-current]")?.removeAttribute("aria-current");
+        phaseNav.querySelector("[data-phase=" + currentPhase + "]").setAttribute("aria-current", "page");
         get("version").textContent = snapshot.definitions ? prefix + "冻结定义 v" + snapshot.definitions.version : "尚未冻结";
         renderSummary();
         renderTable();
@@ -481,13 +599,6 @@ get("refresh").addEventListener("click", refresh);
 get("rows").addEventListener("click", event => {
   const button = event.target.closest("button");
   if (button?.dataset.node) show(button.dataset.node);
-  if (button?.dataset.expand) {
-    const id = button.dataset.expand;
-    if (expanded.has(id)) expanded.delete(id);
-    else expanded.add(id);
-    renderTable();
-    [...get("rows").querySelectorAll("[data-expand]")].find(b => b.dataset.expand === id)?.focus();
-  }
 });
 get("detail-body").addEventListener("click", event => {
   const button = event.target.closest("[data-node]");
