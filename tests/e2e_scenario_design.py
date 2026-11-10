@@ -1,6 +1,7 @@
-"""Opt-in Codex checks of scenario generation and case design as separate tasks."""
+"""Run each scenario and test case stage in a fresh Codex conversation."""
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -8,6 +9,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from e2e_case_implementation import run as run_implementation
 from e2e_definitions import SKILL, codex
 from e2e_preparation import tool
 
@@ -38,6 +40,8 @@ def setup(root):
 
 
 def run(output, model, stage):
+    if stage == "implementation":
+        return run_implementation(output, model)
     root = output / stage
     skill = setup(root)
     identifier = f"AT-{stage}"
@@ -46,9 +50,21 @@ def run(output, model, stage):
     if stage == "scenarios":
         (root / "requirements.md").write_text(SCENARIO_BASIS + "\n")
         (root / "acceptance-points.md").write_text(ORIGINAL_SCENE)
+        requirement = tool(root, "records", "source", "requirements.md", "1", "1")
+        original_scene = tool(root, "records", "source", "acceptance-points.md", "1", "4")
+        tool(root, "records", "create", identifier, "--request", "核对库位保留期限", "--reference", "fixture")
+        tool(root, "records", "freeze", identifier, payload={
+            "request_id": "approved-scope", "base_sha256": None,
+            "requirements": [{"id": "R1", "source": requirement}],
+            "scenarios": [{
+                "id": "SC1", "source": original_scene, "requirements": ["R1"],
+                "scenario_scope": {"title": "库位保留期限上限", "behavior": "验证库位保留的最大允许期限。",
+                                   "criteria": ["保留请求成功，记录已建立且保留期限恰好为 5 天。"]},
+            }],
+        })
         prompt = (
-            f"在当前项目新建验收 {identifier}。只按 requirements.md 的 R1 生成测试场景并核对覆盖。"
-            "acceptance-points.md 是已确认的 SC1 原文，保留 SC1 并纳入本次范围。到场景记录和范围核对为止。"
+            f"在已有验收 {identifier} 中只按 requirements.md 的 R1 补齐测试场景并核对覆盖。"
+            "现有 SC1 来自已确认的 acceptance-points.md，沿用 SC1。到场景记录和范围核对为止。"
         )
     else:
         (root / "requirements.md").write_text(CASE_BASIS + "\n")
@@ -89,19 +105,30 @@ def verify_stage(root, identifier, stage, before, response):
     current = json.loads(versions[-1].read_bytes())
     if stage == "scenarios":
         assert scopes == {"analyze"}, (scopes, response)
+        assert all((snapshots / name).read_bytes() == data for name, data in before.items()), "initial snapshot changed"
+        baseline_bytes, = before.values()
+        baseline = json.loads(baseline_bytes)
+        assert current["requirements"] == baseline["requirements"]
         assert current["requirements"]["R1"]["source"]["text"].strip() == SCENARIO_BASIS
         assert current["scenarios"]["SC1"]["source"]["text"].strip() == ORIGINAL_SCENE.strip()
-        visible_lines = []
-        for scene in current["scenarios"].values():
+        added = set(current["scenarios"]) - set(baseline["scenarios"])
+        assert added, "no scenarios were added for the uncovered boundaries"
+        visible_lines, added_lines = [], []
+        for name, scene in current["scenarios"].items():
             scope = scene["scenario_scope"]
-            visible_lines.append(scope["behavior"])
-            visible_lines.extend(text for group in scope.get("groups", [scope]) for text in group["criteria"])
+            lines = [scope["behavior"], *(text for group in scope.get("groups", [scope]) for text in group["criteria"])]
+            visible_lines.extend(lines)
+            if name in added:
+                added_lines.extend(lines)
         visible = "\n".join(visible_lines)
-        assert "1" in visible and "5" in visible and "拒绝" in visible
-        assert any(token in visible for token in ("保持", "不变", "不改变"))
+        added_text = "\n".join(added_lines)
+        assert "1" in added_text and "5" in added_text and "拒绝" in added_text
+        assert any(token in added_text for token in ("保持", "不变", "不改变"))
         assert not any(token in visible for token in ("A-27", "仓库员甲", "node cli", "执行命令"))
         scope_review = tool(root, "results", "view", identifier)["scope_reviews"]["R1"]
         assert set(scope_review["scope"]["scenarios"]) == set(current["scenarios"])
+        assert scope_review["baseline_sha256"] == hashlib.sha256(baseline_bytes).hexdigest()
+        assert set(scope_review["added_scenario_ids"]) == added
     else:
         assert scopes == {"case-design"}, (scopes, response)
         assert before == {path.name: path.read_bytes() for path in versions}
@@ -169,12 +196,13 @@ def review(output, root, skill, model):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="gpt-6-luna")
-    parser.add_argument("--stage", choices=["scenarios", "design", "review"], action="append")
+    stages = ("scenarios", "design", "implementation", "review")
+    parser.add_argument("--stage", choices=stages, action="append")
     args = parser.parse_args()
     output = Path(tempfile.mkdtemp(prefix="acceptance-stage-e2e-")).resolve()
     print(output, flush=True)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        jobs = [pool.submit(run, output, args.model, stage) for stage in args.stage or ["scenarios", "design", "review"]]
+        jobs = [pool.submit(run, output, args.model, stage) for stage in args.stage or stages]
         for job in jobs:
             job.result()
 

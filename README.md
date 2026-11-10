@@ -50,6 +50,26 @@ TypeScript 迁移可用 [双向对照测试](tests/e2e_runtime_parity.py) 重验
 python3 tests/e2e_definitions.py --model gpt-6-luna
 ```
 
+可单独复跑场景和用例阶段。每个 `--stage` 都使用新的临时项目和 Codex 对话，从固定输入开始，不依赖上一个阶段生成的材料。
+
+```sh
+python3 tests/e2e_scenario_design.py --stage scenarios
+python3 tests/e2e_scenario_design.py --stage design
+python3 tests/e2e_scenario_design.py --stage implementation
+python3 tests/e2e_scenario_design.py --stage review
+```
+
+| 阶段 | 固定输入 | 回归判据 |
+| --- | --- | --- |
+| `scenarios` | 需求与一条现有验收点 | 保留原始依据，补足遗漏边界，场景正文不混入账号或命令，完成范围核对后停止 |
+| `design` | 已记录的场景和分组判据 | 逐项落实为可执行的自然语言检查，落盘后停止 |
+| `implementation` | 已确认的用例设计、就绪的测试环境和有缺口的旧用例 | 匹配与调试绑定同版设计，只改授权测试。正常实现通过，三个独立缺陷副本分别被检出，调试后停止 |
+| `review` | 一条合格场景及一条混入操作步骤的场景 | 独立复审能通过前者并指出后者应返回场景阶段 |
+
+出现新问题时，把最小复现材料放在最先偏离的阶段，给它固定的上游输入，断言该阶段的实际收据、业务结果和停止点。脚本的校验或状态问题加到 `tests/test_records.py` 或 `tests/test_operations.py`，随 CI 运行。需要真实 Codex 判断的用例按阶段本机复跑，临时目录保留轨迹、收据和实际测试输出。
+
+已有的用例匹配与测试环境检查也可分别通过 `tests/e2e_preparation.py --case match` 和 `--case environment` 运行。正式执行的复审门槛、证据失效和最终判定由 `tests/test_operations.py` 的固定收据测试覆盖。
+
 已安装支持子进程采集的 coverage.py 时，可进一步验证完整业务：
 
 ```sh
