@@ -17,7 +17,7 @@
 }
 ```
 
-工具根据已审用例命令逐项执行，保存退出状态、日志、运行时间和真实附件。测试可将需冻结的附件写入 `ACCEPTANCE_EVIDENCE_DIR`。覆盖工具的原始结果和业务断言分开核对。正式执行结束后，按[独立复审约定](reviewer.md)取得逐项意见。重跑部分用例时保留未重跑部分状态，不升级成整场景通过。
+工具根据已审用例命令逐项执行，保存退出状态、日志、运行时间和真实附件。测试可将需冻结的附件写入 `ACCEPTANCE_EVIDENCE_DIR`。覆盖工具的原始结果和业务断言分开核对。执行结果可作为本轮交付物，按实际复审状态呈现。用于正式交付判定前，按[独立复审约定](reviewer.md)取得逐项意见。重跑部分用例时保留未重跑部分状态，不升级成整场景通过。
 
 已登记的人工验证项按[执行前更新 PLAN](#执行前更新-plan)为每次实际观察更新进行中条目，再启动操作。用 `manual <AT-ID>` 保存每次实际操作。提交新的 `request_id`、`scene`、`definitions_sha256`、对应 `match`、`product_version` 和 `product_files`。在 `cases` 下以原验证项 ID 列出实际操作，每项含 `action`、`expected`、`observed`、`performed_by`、`performed_at`、`receipt_reference`、`outcome` 以及 `evidence` 路径和 SHA-256。复核时沿用同一验证项 ID，为本次操作使用新请求 ID，并分别提交实际附件及复审。
 
