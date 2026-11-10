@@ -15,6 +15,8 @@ const MANIFEST_SCHEMA = "acceptance-native-manifest-v1";
 const DEFINITIONS_SCHEMA = "acceptance-native-definitions-v1";
 export const SCENARIO_LIST_PREFIX = /^(?:([0-9]+)[.)]|[-*+•])\s+/u;
 export const posix = process.platform !== "win32";
+// Native resolution expands Windows short names in recorded working directories.
+const canonicalPath = posix ? realpathSync : realpathSync.native;
 
 export class Blocked extends Error {}
 class Usage extends Error {}
@@ -34,7 +36,7 @@ export function within(root: string, path: string) {
 }
 export function resolvedFile(base: string, name: string) {
   const path = resolve(base, name);
-  return exists(path) ? realpathSync(path) : path;
+  return exists(path) ? canonicalPath(path) : path;
 }
 export function portable(path: string) {
   return path.split(sep).join("/");
@@ -190,7 +192,7 @@ export class Project {
   readonly root: string;
   readonly gitRoot: string | null;
   constructor(root: string) {
-    this.root = realpathSync(root);
+    this.root = canonicalPath(root);
     if (!statSync(this.root).isDirectory()) throw new Blocked("project root must be a directory");
     let dir = this.root;
     while (!exists(join(dir, ".git")) && dir !== dirname(dir)) dir = dirname(dir);
