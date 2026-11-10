@@ -4,10 +4,10 @@
 
 若用新用例替换或拆分旧用例，先从旧声明的实际输入和断言找出与需求基线条款相关、可各自失败的检查。把它们逐项记在匹配的 `search_scope` 或其引用的现有设计交接中，附原始文件行号和去向：沿用（用例与断言）、替代（新用例与断言），或排除（范围或等价依据）。旧断言不完整时，保留该检查为缺口，按需求基线条款补足判据。
 
-以 [定义记录工具](../../scripts/records.py) 的 `show` 获取当前 `definitions.sha256`，再用 `source <文件> <首行> <末行>` 取得用例对应完整声明的实际来源对象。检查过但未采用的文件也留实际摘要。用 [操作工具](../../scripts/operations.py) 保存关联：
+以 [定义记录工具](../../scripts/records.mts) 的 `show` 获取当前 `definitions.sha256`，再用 `source <文件> <首行> <末行>` 取得用例对应完整声明的实际来源对象。检查过但未采用的文件也留实际摘要。用 [操作工具](../../scripts/operations.mts) 保存关联：
 
 ```sh
-python3 "<操作工具绝对路径>" --root "<项目根>" match "<AT-ID>" <<'JSON'
+node "<操作工具绝对路径>" --root "<项目根>" match "<AT-ID>" <<'JSON'
 {
   "request_id": "match-sc1",
   "scene": "SC1",

@@ -10,10 +10,10 @@
 
 每个场景填写 `cases`。逐项写入实际测试或人工步骤定位 `selector` 和来源 `source`，以输入和判据确认关联。有既有验证项 ID 时填写 `id` 并原样沿用。逐验证项说明执行收据及其适用性。若已核查且未找到适用验证项，填 `[]`。
 
-把完整 JSON 通过 stdin 交给 [结果工具](../scripts/results.py) 的 `save-inventory`。对只授权读取并输出 `inventory.json` 的任务，这个输出文件就是允许写入的交付物。文件开始时不存在也按实际来源生成。看板直接读取工具返回的报告位置。用户明确指定其他输出位置时，按同一结构写入该位置。
+把完整 JSON 通过 stdin 交给 [结果工具](../scripts/results.mts) 的 `save-inventory`。对只授权读取并输出 `inventory.json` 的任务，这个输出文件就是允许写入的交付物。文件开始时不存在也按实际来源生成。看板直接读取工具返回的报告位置。用户明确指定其他输出位置时，按同一结构写入该位置。
 
 ```sh
-python3 "<结果工具>" --root "<项目根>" save-inventory <<'JSON'
+node "<结果工具>" --root "<项目根>" save-inventory <<'JSON'
 {
   "revision": "<实际完整 Git HEAD>",
   "scope": ["R1"],

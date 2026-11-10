@@ -20,11 +20,18 @@ jobs:
           ref: 525e92f29fe5c625a37669f701897596d04edfd6
           path: .reference
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
       - name: Install coverage for subprocess checks
         run: |
           python3 -m venv "$RUNNER_TEMP/acceptance-python"
           "$RUNNER_TEMP/acceptance-python/bin/python" -m pip install coverage==7.14.2
           npm install --prefix "$RUNNER_TEMP/acceptance-node" --ignore-scripts --no-audit --no-fund c8@10.1.3
+      - name: Type-check the Node runtime
+        run: |
+          npm install --prefix "$RUNNER_TEMP/acceptance-ts" --ignore-scripts --no-audit --no-fund typescript@5.9.3 @types/node@24.19.2
+          "$RUNNER_TEMP/acceptance-ts/node_modules/.bin/tsc" --project tsconfig.json --typeRoots "$RUNNER_TEMP/acceptance-ts/node_modules/@types"
       - name: Test contracts, fixtures and legacy coexistence
         env:
           ACCEPTANCE_REFERENCE: ${{ github.workspace }}/.reference
@@ -43,6 +50,9 @@ jobs:
           ref: 525e92f29fe5c625a37669f701897596d04edfd6
           path: .reference
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'

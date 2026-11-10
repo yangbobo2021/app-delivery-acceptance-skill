@@ -4,7 +4,7 @@
 
 ## 分析、设计与版本
 
-用 [操作工具](../../scripts/operations.py) 通过 stdin 接收 JSON。每项带唯一 `request_id` 和 `definitions_sha256`，指定场景时加 `scene`。先记录用户确认的需求基线。需新建场景时，根据基线和项目约定编写候选文件，保留原义务及相邻场景。仅设计时按用户要求交付候选。任务包含保存场景时，用记录工具的 `source` 和兼容命令 `freeze` 保存变更。
+用 [操作工具](../../scripts/operations.mts) 通过 stdin 接收 JSON。每项带唯一 `request_id` 和 `definitions_sha256`，指定场景时加 `scene`。先记录用户确认的需求基线。需新建场景时，根据基线和项目约定编写候选文件，保留原义务及相邻场景。仅设计时按用户要求交付候选。任务包含保存场景时，用记录工具的 `source` 和兼容命令 `freeze` 保存变更。
 
 | 操作 | 实际输入及停止点 |
 | --- | --- |
@@ -31,7 +31,7 @@
 
 ## 归档、恢复、结束与清理
 
-用 [生命周期工具](../../scripts/lifecycle.py) 的对应操作。每项通过 stdin 提交实际请求。
+用 [生命周期工具](../../scripts/lifecycle.mts) 的对应操作。每项通过 stdin 提交实际请求。
 
 - `archive` 接收 `request_id` 和明确的 `files`（项目相对路径到 SHA-256）。仅选定本验收可共享的结果和附件，交付保留原字节的 ZIP 及清单。
 - `recover` 接收 `operation`、`attempt`、`action`。先用 `inspect`。已存在有效结果时复用。处理中断时核对进程和外部副作用；实际核对后才可用 `reconcile` 或 `supersede`，传 `external_effects` 的实际 `status`（`none_proved` 或 `reconciled`）与 `basis`。仍活动或没有可靠阶段结果时说明具体阻塞。新执行使用新请求 ID。

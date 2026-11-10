@@ -14,7 +14,7 @@
 
 ## 试用当前候选版
 
-需要 Python 3.10+ 和能加载项目 Skill 的 Codex。把 [Skill 目录](skills/app-delivery-acceptance-native) 放到试用项目的 `.agents/skills/app-delivery-acceptance-native`。Git 项目先核对 `.acceptance-local/native-v1/` 已实际被忽略。启用原生计划工具的 Codex 会在执行中显示进度。
+需要 Node.js 24.12+ 和能加载项目 Skill 的 Codex。运行 Skill 自身无需编译或安装 npm 依赖。把 [Skill 目录](skills/app-delivery-acceptance-native) 放到试用项目的 `.agents/skills/app-delivery-acceptance-native`。Git 项目先核对 `.acceptance-local/native-v1/` 已实际被忽略。启用原生计划工具的 Codex 会在执行中显示进度。
 
 在该项目的 Codex 对话中输入：
 
@@ -30,7 +30,7 @@ $app-delivery-acceptance-native 在 AT-demo 将 R1 记录为需求基线。需�
 
 新版写入 `.acceptance/native-v1/` 和 `.acceptance-local/native-v1/`。记录需求和场景时核对实际选段及来源。需求基线以用户确认的原文为准，测试场景可按需补充或修订，记录快照保留变更前后的内容供追溯。
 
-从已有测试场景继续时，可提出「只匹配 SC1 的已有用例，交付缺口」或「为 SC1 补齐用例、正式执行并独立复审」。按项目约定准备实际测试和覆盖工具，Python 项目可使用 coverage.py，其他项目可配置现有采集和验证入口。需要实时查看时可以打开本机只读查看器，也可以导出 HTML 和原始证据快照。
+从已有测试场景继续时，可提出「只匹配 SC1 的已有用例，交付缺口」或「为 SC1 补齐用例、正式执行并独立复审」。按项目约定准备实际测试和覆盖工具，Python 项目可通过该项目的解释器使用 coverage.py，其他项目可配置现有采集和验证入口。需要实时查看时可以打开本机只读查看器，也可以导出 HTML 和原始证据快照。
 
 三类任务的隔离夹具、题面和判据在 [测试矩阵](tests/fixtures/three-modes/matrix.json)。使用 `tests/e2e_three_modes.py --help` 可在本机 Codex 中复验，`tests/audit_three_modes.py` 从本机原生轨迹和产物核对结果。
 
@@ -41,6 +41,8 @@ python3 -m unittest discover -s tests -v
 ```
 
 将 `ACCEPTANCE_REFERENCE` 设为原版固定提交的 checkout 路径时，测试会另外核对 31 个入口，并用原版 Node 工具实际创建冻结记录和验证目录共存。CI 使用固定提交运行这两项测试。
+
+TypeScript 迁移可用 [双向对照测试](tests/e2e_runtime_parity.py) 重验。取本仓库 Python 基线提交 `a5c9637` 中的 Skill 脚本目录作为 `--python-scripts`，使用安装了 coverage.py 的测试解释器。测试分别由两版生成收据，再让另一版读取、重放、导出并验证归档。
 
 原生 Codex 检查需要已登录的 Codex 和已启用的计划工具。该检查在独立临时项目中运行，保留计划事件及工具结果。
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from booking_fixture import prepare_booking
 from e2e_definitions import SKILL, codex, protected
+from skill_command import skill_command
 
 
 IDENTIFIER = "AT-native-fixture"
@@ -18,7 +19,7 @@ IDENTIFIER = "AT-native-fixture"
 
 def tool(project, script, *args, payload=None):
     process = subprocess.run(
-        [sys.executable, str(SKILL / "scripts" / f"{script}.py"), "--root", str(project), *args],
+        skill_command(script, project, *args),
         input=json.dumps(payload), text=True, capture_output=True, timeout=60,
     )
     if process.returncode:

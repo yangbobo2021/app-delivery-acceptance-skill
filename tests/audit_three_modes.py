@@ -227,7 +227,7 @@ def capture(folder, case):
                                    if re.search(r"python3\s+tools/environment\.py\s*>", row["command"])
                                    and "--init" not in row["command"]
                                    and "Missing .local-settings; follow README\nexit_code=1" in row.get("aggregatedOutput", "")
-                                   and any("operations.py" in later["command"] and "runtime" in later["command"]
+                                   and any(any(entry in later["command"] for entry in ("operations.mts", "operations.py")) and "runtime" in later["command"]
                                            and '"status": "ready"' in later.get("aggregatedOutput", "")
                                            for later in commands[i+1:])), None)
             retained = [path for path in stored.glob("AT-*/environment/*.log")

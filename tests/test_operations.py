@@ -12,9 +12,8 @@ import urllib.request
 from pathlib import Path
 
 from booking_fixture import prepare_booking
+from skill_command import skill_command
 
-
-SCRIPTS = Path(__file__).resolve().parents[1] / "skills/app-delivery-acceptance-native/scripts"
 COVERAGE_PYTHON = os.environ.get("ACCEPTANCE_COVERAGE_PYTHON") or (
     sys.executable if importlib.util.find_spec("coverage") else None
 )
@@ -38,17 +37,17 @@ class OperationsTests(unittest.TestCase):
 
     def run_json(self, file, args, payload, expected_code):
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / file), "--root", str(self.root), *args],
+            skill_command(file, self.root, *args),
             input=json.dumps(payload), text=True, capture_output=True, timeout=30,
         )
         self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
         return json.loads(result.stdout)
 
     def record(self, *args, payload=None):
-        return self.run_json("records.py", args, payload, 0)
+        return self.run_json("records", args, payload, 0)
 
     def operation(self, name, request, expected_code=0):
-        return self.run_json("operations.py", [name, self.id], {
+        return self.run_json("operations", [name, self.id], {
             "definitions_sha256": self.freeze["sha256"], **request,
         }, expected_code)
 
@@ -70,13 +69,13 @@ class OperationsTests(unittest.TestCase):
             "requirements": [{"id": "R2", "source": self.record("source", "requirements.md", "3", "3")}],
             "scenarios": [{"id": "SC2", "requirements": ["R2"], "source": source}],
         })
-        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        snapshot = self.run_json("results", ["view", self.id], None, 0)
         self.assertEqual(snapshot["scope_reviews"]["R1"]["record"], result["record"])
         self.freeze = self.record("freeze", self.id, payload={
             "request_id": "add-related", "base_sha256": self.freeze["sha256"],
             "scenarios": [{"id": "SC3", "requirements": ["R1"], "source": source}],
         })
-        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        snapshot = self.run_json("results", ["view", self.id], None, 0)
         self.assertNotIn("R1", snapshot.get("scope_reviews", {}))
         revised = self.operation("analyze", {
             **review, "request_id": "review-r1-updated",
@@ -130,7 +129,7 @@ class OperationsTests(unittest.TestCase):
         freeze_request = {"base_sha256": self.freeze["sha256"], "request_id": "with-scope"}
         for criteria in ([], [scope["behavior"]], ["- 返回 409。"], ["1. 返回 409。"], ["## 结果"]):
             with self.subTest(criteria=criteria):
-                self.run_json("records.py", ["freeze", self.id], {
+                self.run_json("records", ["freeze", self.id], {
                     **freeze_request, "scenarios": [{**scene, "scenario_scope": {**scope, "criteria": criteria}}],
                 }, 2)
         self.freeze = self.record("freeze", self.id, payload={
@@ -140,7 +139,7 @@ class OperationsTests(unittest.TestCase):
             "base_sha256": self.freeze["sha256"], "request_id": "legacy-resave",
             "scenarios": [{k: v for k, v in scene.items() if k != "revision_authorization"}],
         })
-        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        snapshot = self.run_json("results", ["view", self.id], None, 0)
         self.assertEqual(snapshot["scenes"]["SC1"]["definition"]["scenario_scope"], scope)
         self.assertEqual(snapshot["scenes"]["SC1"]["definition"]["source"], source)
 
@@ -186,7 +185,7 @@ class OperationsTests(unittest.TestCase):
             "gaps": {"preserve": "缺少查询原有预约的测试数据"},
         })
         self.assertEqual(design["missing"], ["preserve"])
-        report = self.run_json("results.py", ["report", self.id], {"request_id": "grouped-report"}, 0)
+        report = self.run_json("results", ["report", self.id], {"request_id": "grouped-report"}, 0)
         html = (self.root / report["report"]).read_text()
         self.assertIn("<h4>拒绝冲突</h4><ul><li>重叠预约返回 409。</li>", html)
         self.assertIn("<h4>保留原有数据</h4><ul><li>原有预约保持不变。</li>", html)
@@ -221,7 +220,7 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(plan["cases"]["D-conflict"]["checks"][0], design_request["cases"]["D-conflict"]["checks"][0])
         local = self.root / ".acceptance-local/native-v1" / self.id
         self.assertEqual({folder.name for folder in local.iterdir()}, {"case-design"})
-        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        snapshot = self.run_json("results", ["view", self.id], None, 0)
         scene = snapshot["scenes"]["SC1"]
         self.assertEqual(scene["case_plan"]["cases"], plan["cases"])
         self.assertEqual(scene["cases"], {})
@@ -250,7 +249,7 @@ class OperationsTests(unittest.TestCase):
         debug = self.operation("debug", candidate)
         self.assertEqual(debug["results"][case_id]["execution"]["exit_code"], 0)
         server = subprocess.Popen(
-            [sys.executable, str(SCRIPTS / "results.py"), "--root", str(self.root), "serve", self.id],
+            skill_command("results", self.root, "serve", self.id),
             stdout=subprocess.PIPE, text=True,
         )
 
@@ -304,13 +303,13 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(approved["debug"], "debug-fixed")
         run = self.operation("execute", {**execute, "request_id": "formal-fixed", "design_review": "implementation-passed"})
         review(run, "execution-passed", status="passed", covers=["reject", "preserve"])
-        result = self.run_json("results.py", ["view", self.id], None, 0)["scenes"]["SC1"]
+        result = self.run_json("results", ["view", self.id], None, 0)["scenes"]["SC1"]
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["case_plan"]["sha256"], run["case_design"]["sha256"])
 
         self.operation("case-design", {**design_request, "request_id": "design-v2"})
         self.operation("execute", {**execute, "request_id": "formal-old-design", "design_review": "implementation-passed"}, 2)
-        result = self.run_json("results.py", ["view", self.id], None, 0)["scenes"]["SC1"]
+        result = self.run_json("results", ["view", self.id], None, 0)["scenes"]["SC1"]
         self.assertEqual(result["case_plan"]["id"], "design-v2")
         self.assertEqual(result["history"][-1]["cases"][case_id]["status"], "stale")
         self.assertNotEqual(result["status"], "passed")
@@ -345,7 +344,7 @@ class OperationsTests(unittest.TestCase):
         result = self.operation("execute", {**form, "request_id": "formal-valid", "design_review": design["request_id"]})
         self.assertEqual(result["results"]["TC-verified"]["execution"]["exit_code"], 1)
         self.review_attempt(result, "execution-review", {"status": "product_defect"})
-        view = self.run_json("results.py", ["view", self.id], None, 0)
+        view = self.run_json("results", ["view", self.id], None, 0)
         self.assertEqual(view["scenes"]["SC1"]["cases"]["TC-verified"]["status"], "product_defect")
 
     def test_tdd_requires_reviewed_red_and_preserves_test_bytes_on_green(self):
@@ -404,11 +403,11 @@ class OperationsTests(unittest.TestCase):
             {"id": "R2", "requirement": "R2", "status": "unconfirmed", "sources": ["scenarios.md"],
              "cases": [], "evidence": [], "next": "待确认"},
         ]}
-        saved = self.run_json("results.py", ["save-inventory"], report, 0)
+        saved = self.run_json("results", ["save-inventory"], report, 0)
         path = self.root / saved["report"]
         self.assertEqual(json.loads(path.read_bytes()), report)
         original = path.read_bytes()
-        missing = self.run_json("results.py", ["save-inventory"], {**report, "items": report["items"][:1]}, 2)
+        missing = self.run_json("results", ["save-inventory"], {**report, "items": report["items"][:1]}, 2)
         self.assertIn("missing ['R2']", missing["reason"])
         self.assertEqual(path.read_bytes(), original)
 
@@ -419,6 +418,23 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(runtime, self.runtime())
         failed = self.runtime([sys.executable, "-c", "raise SystemExit(19)"], "failed", 2)
         self.assertEqual(failed["smoke"]["exit_code"], 19)
+        timed = self.operation("runtime", {
+            "request_id": "timeout", "files": ["tools/smoke.py"],
+            "command": [sys.executable, "-c", "import time; time.sleep(20)"], "timeout": 1,
+        }, 2)
+        self.assertEqual(timed["smoke"]["error"], "timed out")
+        self.assertIsNone(timed["smoke"]["exit_code"])
+        malformed = self.operation("runtime", {
+            "request_id": "bad-timeout", "files": ["tools/smoke.py"],
+            "command": [sys.executable, "-c", "raise SystemExit(0)"], "timeout": 1.0,
+        }, 2)
+        self.assertIn("timeout must be", malformed["reason"])
+        if sys.platform == "win32" and not os.environ.get("ACCEPTANCE_PYTHON_BASELINE"):
+            batch = self.root / "batch with spaces.cmd"
+            batch.write_bytes(b"@echo off\r\necho fixture %~1\r\n")
+            windows = self.runtime([str(batch), "two words"], "windows-batch")
+            stdout = next(name for name in windows["smoke"]["output"] if name.endswith(".stdout"))
+            self.assertEqual((self.root / stdout).read_text().strip(), "fixture two words")
         with (self.root / "tools/smoke.py").open("a") as out:
             out.write("\n# Changed")
         self.assertIn("changed", self.runtime(expected_code=2)["reason"])
@@ -479,15 +495,15 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(formal["results"][case_id]["execution"]["exit_code"], 0)
         self.assertEqual(set(formal["results"]), {case_id})
         self.assertEqual(assess(formal, "passed", "formal-review")["target_operation"], "execute")
-        view = self.run_json("results.py", ["view", self.id], None, 0)
+        view = self.run_json("results", ["view", self.id], None, 0)
         self.assertEqual(view["scenes"]["SC1"]["status"], "passed")
-        report = self.run_json("results.py", ["report", self.id], {"request_id": "report", "scene_ids": ["SC1"]}, 0)
+        report = self.run_json("results", ["report", self.id], {"request_id": "report", "scene_ids": ["SC1"]}, 0)
         self.assertTrue(report["report"].startswith(".acceptance-local/"))
         snapshot_path = self.root / report["snapshot"]
         snapshot = json.loads(snapshot_path.read_text())
         with self.subTest("scenes pass while the delivery judgment is missing"):
             self.assertEqual(snapshot["requirement_results"]["R1"]["status"], "pending_delivery_review")
-            blocked = self.run_json("lifecycle.py", ["finish", self.id], {"request_id": "finish-missing"}, 2)
+            blocked = self.run_json("lifecycle", ["finish", self.id], {"request_id": "finish-missing"}, 2)
             self.assertIn("missing requirement judgments", blocked["reason"])
         self.assertIn("独立复审", (self.root / report["report"]).read_text())
         for original_name, exported in snapshot["exported"].items():
@@ -502,7 +518,7 @@ class OperationsTests(unittest.TestCase):
         })
         self.assertEqual(delivered["judgment"]["status"], "passed")
         with subprocess.Popen(
-            [sys.executable, str(SCRIPTS / "results.py"), "--root", str(self.root), "serve", self.id],
+            skill_command("results", self.root, "serve", self.id),
             stdout=subprocess.PIPE, text=True,
         ) as server:
             try:
@@ -545,7 +561,7 @@ class OperationsTests(unittest.TestCase):
         evidence_path = self.root / next(iter(formal["results"][case_id]["execution"]["output"]))
         raw_evidence = evidence_path.read_bytes()
         evidence_path.write_bytes(b"changed")
-        changed = self.run_json("results.py", ["view", self.id], None, 0)
+        changed = self.run_json("results", ["view", self.id], None, 0)
         self.assertEqual(changed["scenes"]["SC1"]["cases"][case_id]["status"], "evidence_missing")
         self.assertEqual(changed["scenes"]["SC1"]["status"], "not_fully_validated")
         with self.subTest("changed evidence invalidates a prior requirement judgment"):
@@ -556,9 +572,9 @@ class OperationsTests(unittest.TestCase):
             self.operation("execute", {**execution_request, "request_id": "formal", "design_review": "review-2"}, 2)["reason"],
         )
         evidence_path.write_bytes(raw_evidence)
-        failed_report = self.run_json("results.py", ["report", self.id], {"request_id": "failed-report"}, 0)
+        failed_report = self.run_json("results", ["report", self.id], {"request_id": "failed-report"}, 0)
         failure_snapshot = json.loads((self.root / failed_report["snapshot"]).read_text())
-        finished = self.run_json("lifecycle.py", ["finish", self.id], {"request_id": "finish-failed"}, 0)
+        finished = self.run_json("lifecycle", ["finish", self.id], {"request_id": "finish-failed"}, 0)
         archived = json.loads((self.root / finished["record"]).read_text())["snapshot"]
         for surface in (failure_snapshot, archived):
             with self.subTest("failure overrides passing scenes"):
@@ -587,21 +603,21 @@ class OperationsTests(unittest.TestCase):
         source, sha = next(iter(ready["smoke"]["output"].items()))
         original = (self.root / source).read_bytes()
         self.assertTrue(original)
-        archive = self.run_json("lifecycle.py", ["archive", self.id], {"request_id": "archive", "files": {source: sha}}, 0)
+        archive = self.run_json("lifecycle", ["archive", self.id], {"request_id": "archive", "files": {source: sha}}, 0)
         clean = {
             "request_id": "cleanup", "archive": archive["archive"], "archive_sha256": archive["sha256"],
             "authorization": "I authorize removing this exact archived log.", "files": [source],
         }
-        self.assertIn("active", self.run_json("lifecycle.py", ["cleanup", self.id], clean, 2)["reason"])
-        self.assertEqual(self.run_json("lifecycle.py", ["finish", self.id], {"request_id": "finish"}, 2)["status"], "blocked")
-        finish = self.run_json("lifecycle.py", ["finish", self.id], {
+        self.assertIn("active", self.run_json("lifecycle", ["cleanup", self.id], clean, 2)["reason"])
+        self.assertEqual(self.run_json("lifecycle", ["finish", self.id], {"request_id": "finish"}, 2)["status"], "blocked")
+        finish = self.run_json("lifecycle", ["finish", self.id], {
             "request_id": "finish", "allow_unfinished": "Stop and preserve unfinished SC1.",
         }, 0)
         self.assertEqual(self.record("current")["native"], None)
         self.assertTrue((self.root / finish["record"]).is_file())
-        self.assertEqual(self.run_json("lifecycle.py", ["cleanup", self.id], clean, 0)["status"], "cleaned")
+        self.assertEqual(self.run_json("lifecycle", ["cleanup", self.id], clean, 0)["status"], "cleaned")
         self.assertFalse((self.root / source).exists())
-        self.assertEqual(self.run_json("lifecycle.py", ["cleanup", self.id], clean, 0)["status"], "cleaned")
+        self.assertEqual(self.run_json("lifecycle", ["cleanup", self.id], clean, 0)["status"], "cleaned")
         self.assertEqual(self.record("start", self.id)["status"], "started")
         self.assertEqual(self.record("current")["native"], self.id)
         import zipfile
@@ -619,15 +635,15 @@ class OperationsTests(unittest.TestCase):
         previous.wait(timeout=5)
         (lock / "owner.json").write_text(json.dumps({"pid": previous.pid, "attempt": [self.id, "runtime", "runtime"]}))
         payload = {"operation": "runtime", "attempt": "runtime"}
-        self.assertEqual(self.run_json("lifecycle.py", ["recover", self.id], payload, 2)["status"], "unreconciled")
+        self.assertEqual(self.run_json("lifecycle", ["recover", self.id], payload, 2)["status"], "unreconciled")
         reconcile = {
             **payload, "action": "reconcile",
             "external_effects": {"status": "none_proved", "basis": "Original fixture process exited and artifacts were verified."},
         }
         (lock / "owner.json").write_text(json.dumps({"pid": os.getpid(), "attempt": [self.id, "runtime", "runtime"]}))
-        self.assertIn("active", self.run_json("lifecycle.py", ["recover", self.id], reconcile, 2)["reason"])
+        self.assertIn("active", self.run_json("lifecycle", ["recover", self.id], reconcile, 2)["reason"])
         (lock / "owner.json").write_text(json.dumps({"pid": previous.pid, "attempt": [self.id, "runtime", "runtime"]}))
-        result = self.run_json("lifecycle.py", ["recover", self.id], reconcile, 0)
+        result = self.run_json("lifecycle", ["recover", self.id], reconcile, 0)
         self.assertEqual(result["status"], "reconciled")
         self.assertEqual(result_file.read_bytes(), original)
         self.assertFalse(lock.exists())
@@ -791,12 +807,12 @@ class OperationsTests(unittest.TestCase):
                     self.assertIn("assigned", rejected["reason"])
                 self.operation("match", {**match, "request_id": "manual-match-revised"})
             self.operation("review", review)
-        view = self.run_json("results.py", ["view", self.id], None, 0)
+        view = self.run_json("results", ["view", self.id], None, 0)
         scene = view["scenes"]["SC1"]
         self.assertEqual(scene["case_design"]["TC-manual"]["kind"], "manual")
         self.assertEqual([row["run"] for row in scene["history"]], ["first", "second"])
         product.write_text("candidate two")
-        view = self.run_json("results.py", ["view", self.id], None, 0)
+        view = self.run_json("results", ["view", self.id], None, 0)
         self.assertEqual([row["cases"]["TC-manual"]["status"] for row in view["scenes"]["SC1"]["history"]],
                          ["stale", "stale"])
 

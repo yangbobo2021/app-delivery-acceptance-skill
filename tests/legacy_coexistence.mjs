@@ -7,13 +7,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const [reference, python] = process.argv.slice(2);
 const workflows = path.join(reference, "skills/en/app-delivery-acceptance/playbooks/acceptance/workflows");
-const script = fileURLToPath(new URL("../skills/app-delivery-acceptance-native/scripts/records.py", import.meta.url));
+const baseline = process.env.ACCEPTANCE_PYTHON_BASELINE;
+const script = baseline ? path.join(baseline, "records.py")
+  : fileURLToPath(new URL("../skills/app-delivery-acceptance-native/scripts/records.mts", import.meta.url));
 const { createAcceptance } = await import(pathToFileURL(path.join(workflows, "create/initialize.mjs")));
 const { freezeAcceptance } = await import(pathToFileURL(path.join(workflows, "freeze/freeze.mjs")));
 const { inventory } = await import(pathToFileURL(path.join(workflows, "view/data.mjs")));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "acceptance-coexistence-"));
 function native(args) {
-  const result = spawnSync(python, [script, "--root", root, ...args], { encoding: "utf8", timeout: 10000 });
+  const result = spawnSync(baseline ? python : process.execPath, [script, "--root", root, ...args], { encoding: "utf8", timeout: 10000 });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return JSON.parse(result.stdout);
 }

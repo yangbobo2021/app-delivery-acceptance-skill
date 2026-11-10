@@ -2,7 +2,7 @@
 
 先确认项目实际测试语言、项目规定的依赖、产品启动路径和用户权限。为就绪探测选一个有代表性且范围受控的命令，绑定影响运行的产品、启动脚本和配置。环境准备的观察与正式验收记录分别交付。
 
-用 [操作工具](../../scripts/operations.py) 执行 `runtime <AT-ID>`，通过 stdin 提交：
+用 [操作工具](../../scripts/operations.mts) 执行 `runtime <AT-ID>`，通过 stdin 提交：
 
 ```json
 {"request_id":"runtime-1","definitions_sha256":"<当前记录快照摘要>","files":["app/booking.py","tests/check_s1.py"],"command":["<实际 Python>","tests/check_s1.py"],"timeout":60}

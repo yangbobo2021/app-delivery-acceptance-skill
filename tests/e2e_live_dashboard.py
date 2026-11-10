@@ -13,6 +13,7 @@ from urllib.parse import urljoin
 from playwright.sync_api import expect, sync_playwright
 
 from e2e_three_modes import MATRIX, SKILL, native, prepare
+from skill_command import skill_command
 
 
 def run(output, benchmark, model):
@@ -25,12 +26,10 @@ def run(output, benchmark, model):
     shutil.copytree(SKILL, skill, ignore=shutil.ignore_patterns("__pycache__"))
     prompt = MATRIX["cases"]["A1"]["prompt"]
     (output / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
-    subprocess.run([
-        sys.executable, str(skill / "scripts/records.py"), "--root", str(project),
-        "create", "AT-delivery", "--request", prompt, "--reference", "当前用户消息",
-    ], check=True)
+    subprocess.run(skill_command("records", project, "create", "AT-delivery", "--request", prompt,
+                                 "--reference", "当前用户消息", scripts=skill / "scripts"), check=True)
     server = subprocess.Popen(
-        [sys.executable, str(skill / "scripts/results.py"), "--root", str(project), "serve", "AT-delivery"],
+        skill_command("results", project, "serve", "AT-delivery", scripts=skill / "scripts"),
         stdout=subprocess.PIPE, text=True,
     )
     timeline = []

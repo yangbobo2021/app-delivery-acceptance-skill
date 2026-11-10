@@ -6,7 +6,7 @@
 
 只随全量回归运行的场景也要落盘对应的最终用例。用[用例匹配](case-preparation/entry.md)将实际测试声明与场景关联。已绑定红灯或绿灯收据的用例沿用其 ID。回归套件收据只证明该套件的结果，逐用例执行列以对应的单独收据为准。
 
-用 [operations.py](../scripts/operations.py) 的 `tdd-red <AT-ID>` 跑实际测试。以下字段通过 stdin 传入，路径相对 Git 根。
+用 [operations.mts](../scripts/operations.mts) 的 `tdd-red <AT-ID>` 跑实际测试。以下字段通过 stdin 传入，路径相对 Git 根。
 
 ```json
 {"request_id":"red-1","scene":"SC1","definitions_sha256":"实际记录快照摘要","runtime":"实际就绪收据","match":"实际匹配请求 ID","case_id":"匹配收据中的实际 TC ID","product_files":["app.py"],"test_files":["tests/check.py"],"command":["python3","tests/check.py"],"coverage_policy":"off","coverage_basis":"用户实际授权"}

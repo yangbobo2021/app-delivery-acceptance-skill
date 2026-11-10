@@ -26,7 +26,7 @@
 
 判断创建与持久化场景时，核对候选用例是否用场景里的独立预期断言了首次写入值。典型的房间、时间、标题需要逐字段核对。若代码仅比较创建返回和随后查询返回的两个产品观察，即使两者都一致，也应把缺少独立预期判为 `needs_revision`，明确指出实际漏掉的字段和位置。
 
-由主 Agent 从工具返回取得真实 Reviewer 会话 ID。以意见文件的文件名（去掉 `.json`）作为 `request_id`。用程序直接读取目标 `result.json` 字节计算 SHA-256 并填入请求，用 [操作工具](../../scripts/operations.py) 的 `review <AT-ID>` 记录。工具直接读取 Reviewer 自己写出的文件并保留原始字节，主 Agent 只传路径。
+由主 Agent 从工具返回取得真实 Reviewer 会话 ID。以意见文件的文件名（去掉 `.json`）作为 `request_id`。用程序直接读取目标 `result.json` 字节计算 SHA-256 并填入请求，用 [操作工具](../../scripts/operations.mts) 的 `review <AT-ID>` 记录。工具直接读取 Reviewer 自己写出的文件并保留原始字节，主 Agent 只传路径。
 
 ```json
 {
