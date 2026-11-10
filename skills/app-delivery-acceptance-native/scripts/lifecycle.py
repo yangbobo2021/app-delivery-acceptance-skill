@@ -13,16 +13,16 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from evidence import capture, file_bindings, local, now, project_ref, publish_index, requirement_scope, scoped, upstream, verify_bindings
+from evidence import attempts, capture, file_bindings, local, now, project_ref, publish_index, requirement_scope, scoped, upstream, verify_bindings
 from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, require_text, token
-from results import attempts, delivery_basis, view
+from results import delivery_basis, view
 
 
 def analyze(project, identifier, request, definitions, path):
     text = require_text(request["analysis"], "analysis with identified gaps")
     selected = request["requirement_ids"]
     if not selected or not set(selected) <= definitions["requirements"].keys():
-        raise Blocked("analysis must reference actual frozen requirements")
+        raise Blocked("analysis must reference requirements in the baseline")
     result = {"status": "analyzed", "analysis": text, "requirements": {item: definitions["requirements"][item] for item in selected}}
     if "scope_review" in request:
         if len(selected) != 1:
@@ -32,7 +32,7 @@ def analyze(project, identifier, request, definitions, path):
         baseline_sha = review["baseline_sha256"]
         baseline = next((item for _, sha, item in project.versions(identifier) if sha == baseline_sha), None)
         if not baseline or requirement not in baseline["requirements"]:
-            raise Blocked("scene scope review needs the frozen baseline for this requirement")
+            raise Blocked("scene scope review needs the starting record snapshot for this requirement")
         original = requirement_scope(baseline, requirement)
         current = requirement_scope(definitions, requirement)
         if any(definitions["scenarios"][name]["requirement_sha256"][requirement] != current["requirement_sha256"]
@@ -40,7 +40,7 @@ def analyze(project, identifier, request, definitions, path):
             raise Blocked("scene scope review must use scenes bound to the current requirement")
         if (original["requirement_sha256"] != current["requirement_sha256"]
                 or any(current["scenarios"].get(name) != sha for name, sha in original["scenarios"].items())):
-            raise Blocked("scene scope review must preserve the frozen baseline")
+            raise Blocked("scene scope review must preserve the baseline requirement and the starting scenarios")
         listed = review["scenario_ids"]
         if not isinstance(listed, list) or len(listed) != len(current["scenarios"]) or set(listed) != current["scenarios"].keys():
             raise Blocked("scene scope review must list every current scene for the requirement")
@@ -60,7 +60,7 @@ def assess_scenarios(project, identifier, request, definitions, path):
     raw = reviewer_output(project, identifier, request)
     result = json.loads(raw)
     if set(result["scenes"]) != {request["scene"]}:
-        raise Blocked("scenario assessment must address the selected frozen scene")
+        raise Blocked("scenario assessment must address the selected test scenario")
     verdict = result["scenes"][request["scene"]]
     if verdict["status"] not in {"passed", "needs_revision", "insufficient_evidence"}:
         raise Blocked("unrecognized scene assessment outcome")
@@ -150,7 +150,7 @@ def project_prepare(project, identifier, request, definitions, path):
 def source_status(project, identifier, request, definitions, path):
     collection, separator, key = request["reference"].partition(":")
     if not separator or collection not in {"requirements", "scenarios"} or key not in definitions[collection]:
-        raise Blocked("source status must refer to a frozen definition")
+        raise Blocked("source status must refer to a recorded requirement or test scenario")
     status = request["source_status"]
     if status not in {"read_failed", "deletion_confirmed", "available"}:
         raise Blocked("source observation must distinguish failure from confirmed deletion")
@@ -172,7 +172,7 @@ def delivery_judge(project, identifier, request, definitions, path):
         raise Blocked("delivery review requires a separate Reviewer")
     selected = request["requirement_ids"]
     if not selected or not set(selected) <= definitions["requirements"].keys():
-        raise Blocked("select actual frozen requirements")
+        raise Blocked("select requirements in the baseline")
     snapshot = view(project, identifier)
     selected_scenes = {
         key: scene for key, scene in snapshot["scenes"].items()
@@ -227,7 +227,7 @@ def backfill(project, identifier, request, definitions, path):
             raise Blocked("backfill supports ordinary project documents")
         before = file.read_bytes() if file.exists() else None
         if spec["base_sha256"] != (digest(before) if before is not None else None):
-            raise Blocked("backfill document baseline changed")
+            raise Blocked("the source document changed since backfill was prepared")
         after = require_text(spec["text"], "candidate document")
         difference = difflib.unified_diff(
             (before or b"").decode("utf-8").splitlines(keepends=True), after.splitlines(keepends=True),

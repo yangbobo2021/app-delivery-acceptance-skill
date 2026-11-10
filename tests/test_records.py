@@ -87,7 +87,7 @@ class RecordsTests(unittest.TestCase):
         with self.assertRaisesRegex(records.Blocked, "source changed"):
             self.project.freeze(self.identifier, frozen_request(requirements=[{"id": "R1", "source": old_source}]))
         scene = {**oral("SC1", "使用指定环境。"), "requirements": ["R2"]}
-        with self.assertRaisesRegex(records.Blocked, "unfrozen requirement"):
+        with self.assertRaisesRegex(records.Blocked, "requirement missing from the baseline"):
             self.project.freeze(self.identifier, frozen_request(scenarios=[scene]))
         self.assertIsNone(self.project.show(self.identifier)["definitions"])
 
@@ -131,7 +131,7 @@ class RecordsTests(unittest.TestCase):
         self.assertEqual(self.project.freeze(self.identifier, updated)["status"], "already_frozen")
         self.assertEqual(self.project.freeze(self.identifier, initial)["status"], "historical_request")
         self.assertEqual((self.root / first["path"]).read_bytes(), history)
-        with self.assertRaisesRegex(records.Blocked, "baseline changed"):
+        with self.assertRaisesRegex(records.Blocked, "record snapshot changed"):
             self.project.freeze(self.identifier, frozen_request("stale", first["sha256"], [oral("R3", "追加要求。")]))
         self.assertEqual(self.project.show(self.identifier)["definitions"]["sha256"], second["sha256"])
 

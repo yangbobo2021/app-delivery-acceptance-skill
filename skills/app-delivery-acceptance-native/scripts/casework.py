@@ -3,6 +3,7 @@
 import json
 import os
 
+from case_design import require_current_design
 from coverage_adapter import project_measure
 from coverage_python import measure_python
 from evidence import argv, capture, file_bindings, local, project_ref, upstream, verify_bindings, verify_checkout
@@ -96,6 +97,10 @@ def debug(project, identifier, request, definitions, path):
     coverage = coverage_policy(project, identifier, request)
     if matched["scene"] != request["scene"]:
         raise Blocked("case matching belongs to a different scene")
+    case_design = matched.get("case_design")
+    require_current_design(project, identifier, request, case_design)
+    if case_design:
+        verify_bindings(project, matched["bindings"])
     cases = request["cases"]
     if not isinstance(cases, dict) or not cases:
         raise Blocked("supply actual selected case ids and their individual commands")
@@ -107,12 +112,15 @@ def debug(project, identifier, request, definitions, path):
     for name, case in cases.items():
         if not token(name, "case id").startswith("TC-"):
             raise Blocked("case ids must start with TC-")
-        if matched["cases"].get(name, {}).get("kind") == "manual":
+        match = matched["cases"].get(name, {})
+        if match.get("kind") == "manual":
             raise Blocked("a manual verification item must be recorded as an observation")
         if not isinstance(case["files"], list) or not case["files"]:
             raise Blocked("each case must identify its test files")
-        if baseline and matched["cases"][name]["source"]["path"] not in case["files"]:
-            raise Blocked("TDD baseline must bind the matched test source")
+        if case_design and (match.get("status") != "active" or not match["covers"]):
+            raise Blocked("each selected implementation must map to its designed checks")
+        if (baseline or case_design) and match["source"]["path"] not in case["files"]:
+            raise Blocked("bind the matched test source in the candidate")
         argv(case["command"])
     candidate_files = sorted({file for case in cases.values() for file in case["files"]})
     candidate = file_bindings(project, candidate_files)
@@ -132,6 +140,7 @@ def debug(project, identifier, request, definitions, path):
         "case_obligations": {name: sorted(matched["cases"][name]["covers"]) for name in cases if name in matched["cases"]},
         "obligations": matched["obligations"], "cwd": cwd, "revision": runtime.get("revision"),
         "artifacts": evidence_files(project, path),
+        **({"case_design": case_design} if case_design else {}),
     }
 
 
@@ -179,6 +188,8 @@ def review(project, identifier, request, definitions, path):
         or target["definitions_sha256"] != request["definitions_sha256"]
     ):
         raise Blocked("review does not refer to this scene, current definitions and exact attempt")
+    if section != "history":
+        require_current_design(project, identifier, request, target.get("case_design"))
     if target["bindings"]:
         verify_bindings(project, target["bindings"])
     verify_checkout(project, target)
@@ -210,6 +221,11 @@ def review(project, identifier, request, definitions, path):
             raise Blocked("review coverage must reference declared scene obligations")
         if key in assigned and not coverage_within(covers, assigned[key]):
             raise Blocked(f"review coverage exceeds assigned obligations for {key}; request a corrected independent opinion")
+        if section == "debug" and target.get("case_design"):
+            if finding["status"] == "needs_revision" and finding.get("revision_target") not in {"scene", "design", "implementation"}:
+                raise Blocked("name the scene, design or implementation that needs revision")
+            if (finding["status"] == "passed" or finding.get("design_status") == "valid") and set(covers) != set(assigned[key]):
+                raise Blocked("a passing implementation review must confirm every assigned check")
         result = target["results"][key]
         if finding.get("design_status") is not None and (
             section != "debug" or finding["status"] != "product_defect" or finding["design_status"] != "valid"
@@ -230,6 +246,12 @@ def review(project, identifier, request, definitions, path):
     }
 
 
+def design_allows_execution(finding):
+    return finding.get("status") == "passed" or (
+        finding.get("status") == "product_defect" and finding.get("design_status") == "valid"
+    )
+
+
 def execute(project, identifier, request, definitions, path):
     assessment = upstream(project, identifier, request, "design_review", "review", "reviewed")
     if assessment["target_operation"] != "debug" or assessment["scene"] != request["scene"]:
@@ -237,17 +259,14 @@ def execute(project, identifier, request, definitions, path):
     design, sha = bound_attempt(project, identifier, "debug", assessment["target"], "debugged")
     if sha != assessment["target_sha256"]:
         raise Blocked("reviewed design evidence changed")
+    case_design = design.get("case_design")
+    require_current_design(project, identifier, request, case_design)
     verify_bindings(project, design["bindings"])
     verify_bindings(project, design["artifacts"])
     selected = request["selected_case_ids"]
     if not isinstance(selected, list) or not selected or len(selected) != len(set(selected)):
         raise Blocked("provide distinct case ids for this run")
-    def valid_design(finding):
-        return finding.get("status") == "passed" or (
-            finding.get("status") == "product_defect" and finding.get("design_status") == "valid"
-        )
-
-    if any(not valid_design(assessment["judgments"].get(key, {})) for key in selected):
+    if any(not design_allows_execution(assessment["judgments"].get(key, {})) for key in selected):
         raise Blocked("selected cases lack a passing design review")
     coverage = None
     if design["coverage_preparation"]:
@@ -262,6 +281,7 @@ def execute(project, identifier, request, definitions, path):
         "selection": "all_designed_cases" if set(selected) == set(design["cases"]) else "selected_cases_only",
         "bindings": design["bindings"], "artifacts": evidence_files(project, path),
         "cwd": design.get("cwd", "."), "revision": design.get("revision"),
+        **({"case_design": case_design} if case_design else {}),
     }
 
 
@@ -300,12 +320,15 @@ def manual(project, identifier, request, definitions, path):
     product_version = require_text(request["product_version"], "observed product version")
     obligations = {}
     planned = {}
+    case_design = None
     if request.get("match"):
         matched = upstream(project, identifier, request, "match", "match", "matched")
         if matched["scene"] != request["scene"]:
             raise Blocked("manual matching belongs to a different scene")
         obligations = matched["obligations"]
         planned = {name: item for name, item in matched["cases"].items() if item.get("kind") == "manual"}
+        case_design = matched.get("case_design")
+    require_current_design(project, identifier, request, case_design)
     if request.get("match") and any(name not in planned or planned[name]["status"] != "active" for name in cases):
         raise Blocked("manual observation must use an active verification item from the scene")
     if planned and not request.get("product_files"):
@@ -340,4 +363,5 @@ def manual(project, identifier, request, definitions, path):
         "product_version": product_version, "selection": "selected_cases_only", "obligations": obligations,
         "case_obligations": {name: sorted(planned[name]["covers"]) for name in cases if name in planned},
         "artifacts": evidence_files(project, path),
+        **({"case_design": case_design} if case_design else {}),
     }

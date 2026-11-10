@@ -1,13 +1,14 @@
 """Record a reviewed red test and rerun exactly that candidate on changed product."""
 import os
 
+from case_design import require_current_design
 from casework import bound_attempt, coverage_policy, evidence_files, run_cases
 from evidence import argv, capture, file_bindings, upstream, verify_bindings
 from records import Blocked, acceptance_id, atomic_write, token
 
 
 def match_tdd_case(project, identifier, definitions, scene, source, reference):
-    """Reuse a TDD identity only when its recorded test and frozen scene still match."""
+    """Reuse a TDD identity only when its recorded test and scenario still match."""
     origin = acceptance_id(reference.get("acceptance_id", identifier))
     case_id = token(reference["case_id"], "TDD case id")
     receipt, sha = bound_attempt(project, origin, "tdd-green", reference["green"], "green_observed")
@@ -55,9 +56,21 @@ def red(project, identifier, request, definitions, path):
         raise Blocked("case ids must start with TC-")
     case = {"command": argv(request["command"]), "files": request["test_files"]}
     tests = file_bindings(project, case["files"])
+    case_design = None
+    if request.get("match"):
+        matched = upstream(project, identifier, request, "match", "match", "matched")
+        implementation = matched["cases"].get(case_id, {})
+        if (matched["scene"] != request["scene"] or implementation.get("status") != "active"
+                or implementation.get("kind") == "manual" or not implementation["covers"]
+                or implementation["source"]["path"] not in tests):
+            raise Blocked("TDD red needs a matched automated implementation of the scene checks")
+        case.update(source=implementation["source"], covers=implementation["covers"])
+        case_design = matched.get("case_design")
+    require_current_design(project, identifier, request, case_design)
     if "source" in request:
         source = project.verified_source(request["source"])
-        if source["kind"] != "file" or tests.get(source["path"]) != source["sha256"]:
+        if (source["kind"] != "file" or tests.get(source["path"]) != source["sha256"]
+                or source != case.get("source", source)):
             raise Blocked("TDD case source must be among the bound test files")
         case["source"] = source
     if product.keys() & tests.keys():
@@ -71,6 +84,7 @@ def red(project, identifier, request, definitions, path):
         **result, "status": "red_observed" if failed else "blocked",
         "reason": None if failed else "expected a completed failing test with required evidence",
         "artifacts": evidence_files(project, path),
+        **({"case_design": case_design} if case_design else {}),
     }
 
 
@@ -81,6 +95,8 @@ def green(project, identifier, request, definitions, path):
     original, sha = bound_attempt(project, identifier, "tdd-red", review["target"], "red_observed")
     if sha != review["target_sha256"] or any(row["status"] != "expected_failure" for row in review["judgments"].values()):
         raise Blocked("green needs a Reviewer-confirmed behavioral failure")
+    case_design = original.get("case_design")
+    require_current_design(project, identifier, request, case_design)
     verify_bindings(project, original["artifacts"])
     verify_bindings(project, original["test_bindings"])
     runtime = upstream(project, identifier, request, "runtime", "runtime", "ready")
@@ -103,4 +119,5 @@ def green(project, identifier, request, definitions, path):
         "reason": None if passed else "the original test or project regression did not pass",
         "red": original["request_id"], "red_review": review["request_id"],
         "regression": regression, "artifacts": evidence_files(project, path),
+        **({"case_design": case_design} if case_design else {}),
     }

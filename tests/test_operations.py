@@ -116,6 +116,205 @@ class OperationsTests(unittest.TestCase):
             "command": command or [sys.executable, "tools/smoke.py"],
         }, expected_code)
 
+    def test_structured_scene_binds_case_design_to_business_criteria(self):
+        source = self.record("source", "scenarios.md", "3", "10")
+        scope = {
+            "title": "重叠预约拒绝",
+            "behavior": "同一会议室已有预约时，验证部分重叠的预约会被拒绝。",
+            "criteria": ["部分重叠的预约返回 409。"],
+        }
+        scene = {
+            "id": "SC1", "requirements": ["R1"], "source": source,
+            "revision_authorization": "测试允许补录场景判据",
+        }
+        freeze_request = {"base_sha256": self.freeze["sha256"], "request_id": "with-scope"}
+        for criteria in ([], [scope["behavior"]], ["- 返回 409。"], ["1. 返回 409。"], ["## 结果"]):
+            with self.subTest(criteria=criteria):
+                self.run_json("records.py", ["freeze", self.id], {
+                    **freeze_request, "scenarios": [{**scene, "scenario_scope": {**scope, "criteria": criteria}}],
+                }, 2)
+        self.freeze = self.record("freeze", self.id, payload={
+            **freeze_request, "scenarios": [{**scene, "scenario_scope": scope}],
+        })
+        self.freeze = self.record("freeze", self.id, payload={
+            "base_sha256": self.freeze["sha256"], "request_id": "legacy-resave",
+            "scenarios": [{k: v for k, v in scene.items() if k != "revision_authorization"}],
+        })
+        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        self.assertEqual(snapshot["scenes"]["SC1"]["definition"]["scenario_scope"], scope)
+        self.assertEqual(snapshot["scenes"]["SC1"]["definition"]["source"], source)
+
+        request = {
+            "request_id": "design", "scene": "SC1",
+            "cases": {"D-reject": {
+                "title": "拒绝重叠预约", "kind": "automated",
+                "preconditions": "A 室已有 10:00–11:00 的预约",
+                "checks": [{"id": "reject", "action": "提交 10:30–11:30 的预约", "expected": "返回 409"}],
+            }},
+        }
+        wrong_quote = "在 A 会议室提交同日"
+        self.assertIn(wrong_quote, source["text"])
+        blocked = self.operation("case-design", {
+            **request, "obligations": [{"id": "reject", "quote": wrong_quote}],
+        }, expected_code=2)
+        self.assertIn("recorded scenario criterion", blocked["reason"])
+        result = self.operation("case-design", {
+            **request, "request_id": "criterion", "obligations": [{"id": "reject", "quote": scope["criteria"][0]}],
+        })
+        self.assertEqual(result["obligations"], {"reject": scope["criteria"][0]})
+
+    def test_grouped_criteria_are_available_to_design_and_report(self):
+        source = self.record("source", "scenarios.md", "3", "10")
+        groups = [
+            {"title": "拒绝冲突", "criteria": ["重叠预约返回 409。"]},
+            {"title": "保留原有数据", "criteria": ["原有预约保持不变。"]},
+        ]
+        scope = {"title": "处理冲突预约", "behavior": "验证同一会议室的重叠预约。", "groups": groups}
+        self.freeze = self.record("freeze", self.id, payload={
+            "base_sha256": self.freeze["sha256"], "request_id": "grouped",
+            "scenarios": [{"id": "SC1", "requirements": ["R1"], "source": source, "scenario_scope": scope,
+                           "revision_authorization": "测试允许补录场景判据"}],
+        })
+        design = self.operation("case-design", {
+            "request_id": "grouped-design", "scene": "SC1",
+            "obligations": [{"id": "reject", "quote": groups[0]["criteria"][0]},
+                            {"id": "preserve", "quote": groups[1]["criteria"][0]}],
+            "cases": {"D-reject": {
+                "title": "拒绝重叠预约", "kind": "automated", "preconditions": "会议室已有预约",
+                "checks": [{"id": "reject", "action": "提交重叠预约", "expected": "返回 409"}],
+            }},
+            "gaps": {"preserve": "缺少查询原有预约的测试数据"},
+        })
+        self.assertEqual(design["missing"], ["preserve"])
+        report = self.run_json("results.py", ["report", self.id], {"request_id": "grouped-report"}, 0)
+        html = (self.root / report["report"]).read_text()
+        self.assertIn("<h4>拒绝冲突</h4><ul><li>重叠预约返回 409。</li>", html)
+        self.assertIn("<h4>保留原有数据</h4><ul><li>原有预约保持不变。</li>", html)
+        self.assertIn("测试场景原文", html)
+        local = self.root / ".acceptance-local/native-v1" / self.id
+        self.assertEqual({path.name for path in local.iterdir()}, {"case-design", "reports"})
+
+    def test_case_design_is_separate_and_revisions_invalidate_prior_implementation(self):
+        path = "tests/check_s1.py"
+        test = self.root / path
+        original = test.read_text()
+        design_request = {
+            "request_id": "design-v1", "scene": "SC1",
+            "obligations": [
+                {"id": "reject", "quote": "第二次响应 JSON status 必须为 409"},
+                {"id": "preserve", "quote": "所有字段和值均不变"},
+            ],
+            "cases": {"D-conflict": {
+                "title": "重叠预约与状态保护", "kind": "automated",
+                "preconditions": "A 室已有一条预约",
+                "checks": [
+                    {"id": "reject", "title": "拒绝重叠预约", "setup": ["查询并确认原预约存在"],
+                     "action": "提交重叠预约", "expected": "业务状态为 409"},
+                    {"id": "preserve", "action": "比较拒绝前后完整列表", "expected": "所有记录及字段相同"},
+                ],
+            }},
+        }
+        plan = self.operation("case-design", design_request)
+        self.assertEqual(test.read_text(), original)
+        self.assertEqual(plan["missing"], [])
+        self.assertEqual([step["id"] for step in plan["cases"]["D-conflict"]["checks"]], ["reject", "preserve"])
+        self.assertEqual(plan["cases"]["D-conflict"]["checks"][0], design_request["cases"]["D-conflict"]["checks"][0])
+        local = self.root / ".acceptance-local/native-v1" / self.id
+        self.assertEqual({folder.name for folder in local.iterdir()}, {"case-design"})
+        snapshot = self.run_json("results.py", ["view", self.id], None, 0)
+        scene = snapshot["scenes"]["SC1"]
+        self.assertEqual(scene["case_plan"]["cases"], plan["cases"])
+        self.assertEqual(scene["cases"], {})
+        self.assertCountEqual(scene["missing_obligations"], ["reject", "preserve"])
+
+        def match_request(request_id, assertions):
+            source = self.record("source", path, "1", str(len(test.read_text().splitlines())))
+            return {
+                "request_id": request_id, "scene": "SC1", "case_design": "design-v1",
+                "search_scope": path, "inspected": {path: source["sha256"]},
+                "cases": [{"selector": "main", "status": "active", "source": source, "covers": assertions}],
+            }
+
+        assertions = {"reject": "assert rejected['status'] == 409"}
+        request = match_request("partial", assertions)
+        self.operation("match", {**request, "request_id": "redefine", "obligations": design_request["obligations"]}, 2)
+        partial = self.operation("match", request)
+        self.assertEqual((partial["coverage"], partial["missing"]), ("partial", ["preserve"]))
+        case_id, = partial["cases"]
+        self.runtime()
+        candidate = {
+            "request_id": "debug-v1", "scene": "SC1", "runtime": "runtime", "match": "partial",
+            "coverage_policy": "off", "coverage_basis": "isolated fixture",
+            "cases": {case_id: {"command": [sys.executable, path], "files": [path]}},
+        }
+        debug = self.operation("debug", candidate)
+        self.assertEqual(debug["results"][case_id]["execution"]["exit_code"], 0)
+        server = subprocess.Popen(
+            [sys.executable, str(SCRIPTS / "results.py"), "--root", str(self.root), "serve", self.id],
+            stdout=subprocess.PIPE, text=True,
+        )
+
+        def stop_server():
+            server.terminate()
+            server.wait(timeout=5)
+            server.stdout.close()
+
+        self.addCleanup(stop_server)
+        url = json.loads(server.stdout.readline())["url"]
+
+        def check_preparation(expected):
+            with urllib.request.urlopen(url + "snapshot.json", timeout=5) as response:
+                preview = json.load(response)["scenes"]["SC1"]
+            self.assertEqual(preview["case_design"][case_id]["preparation"], expected)
+            self.assertEqual(preview["case_design"][case_id]["debug_exit_code"], 0)
+            self.assertEqual(preview["cases"][case_id]["status"], "not_executed")
+            self.assertEqual(preview["history"], [])
+            return preview["case_design"][case_id]
+
+        check_preparation("debug_pending_review")
+
+        def review(attempt, key, **finding):
+            expected = finding.pop("expected_code", 0)
+            return self.operation("review", {
+                "request_id": key, "scene": "SC1",
+                "target_operation": attempt["operation"], "target": attempt["request_id"],
+                "target_sha256": hashlib.sha256((self.root / attempt["record"]).read_bytes()).hexdigest(),
+                "reviewer_session": "fixture-reviewer",
+                "raw_review": json.dumps({"cases": {case_id: {"reason": "fixture opinion", **finding}}}),
+            }, expected)
+
+        review(debug, "overclaim", status="passed", covers=["reject", "preserve"], expected_code=2)
+        review(debug, "unclassified", status="needs_revision", covers=["reject"], expected_code=2)
+        review(debug, "revision", status="needs_revision", revision_target="implementation", covers=["reject"])
+        blocked = check_preparation("design_blocked")
+        self.assertEqual(blocked["design_review"]["reason"], "fixture opinion")
+        execute = {"request_id": "formal", "scene": "SC1", "selected_case_ids": [case_id]}
+        self.operation("execute", {**execute, "design_review": "revision"}, 2)
+
+        state_assertion = "assert call(db, 'list') == before"
+        test.write_text(original.replace("        rejected =", "        before = call(db, 'list')\n        rejected =")
+                        .replace("        print('SC1", f"        {state_assertion}\n        print('SC1"))
+        self.operation("debug", {**candidate, "request_id": "stale-match"}, 2)
+        full = self.operation("match", match_request("full", {**assertions, "preserve": state_assertion}))
+        self.assertEqual(list(full["cases"]), [case_id])
+        self.assertEqual(full["coverage"], "full")
+        fixed = self.operation("debug", {**candidate, "request_id": "debug-fixed", "match": "full"})
+        review(fixed, "implementation-passed", status="passed", covers=["reject", "preserve"])
+        approved = check_preparation("ready_for_execution")
+        self.assertEqual(approved["debug"], "debug-fixed")
+        run = self.operation("execute", {**execute, "request_id": "formal-fixed", "design_review": "implementation-passed"})
+        review(run, "execution-passed", status="passed", covers=["reject", "preserve"])
+        result = self.run_json("results.py", ["view", self.id], None, 0)["scenes"]["SC1"]
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["case_plan"]["sha256"], run["case_design"]["sha256"])
+
+        self.operation("case-design", {**design_request, "request_id": "design-v2"})
+        self.operation("execute", {**execute, "request_id": "formal-old-design", "design_review": "implementation-passed"}, 2)
+        result = self.run_json("results.py", ["view", self.id], None, 0)["scenes"]["SC1"]
+        self.assertEqual(result["case_plan"]["id"], "design-v2")
+        self.assertEqual(result["history"][-1]["cases"][case_id]["status"], "stale")
+        self.assertNotEqual(result["status"], "passed")
+
     def review_attempt(self, attempt, key, decision):
         return self.operation("review", {
             "request_id": key, "scene": "SC1",

@@ -16,6 +16,7 @@ from pathlib import Path
 NAMESPACE = "native-v1"
 MANIFEST_SCHEMA = "acceptance-native-manifest-v1"
 DEFINITIONS_SCHEMA = "acceptance-native-definitions-v1"
+SCENARIO_LIST_PREFIX = re.compile(r"^(?:(?P<number>[0-9]+)[.)]|[-*+•])\s+")
 
 
 class Blocked(ValueError):
@@ -43,6 +44,47 @@ def require_text(value, label):
     if not isinstance(value, str) or not value.strip():
         raise Blocked(f"{label} must be non-empty text")
     return value
+
+
+def scenario_scope(value):
+    if not isinstance(value, dict) or ("criteria" in value) == ("groups" in value):
+        raise Blocked("scenario_scope requires either criteria or groups")
+    title = require_text(value.get("title"), "scenario title").strip()
+    behavior = require_text(value.get("behavior"), "scenario behavior").strip()
+    scope = {"title": title, "behavior": behavior}
+    seen = {behavior}
+
+    def criteria(items):
+        if not isinstance(items, list) or not items:
+            raise Blocked("scenario criteria must be a non-empty list")
+        result = []
+        for item in items:
+            criterion = require_text(item, "scenario criterion").strip()
+            if SCENARIO_LIST_PREFIX.match(criterion) or re.match(r"^#{1,6}\s", criterion):
+                raise Blocked("write scenario criteria without list or heading markup")
+            if criterion in seen:
+                raise Blocked("scenario criteria must be distinct and must not repeat the behavior")
+            seen.add(criterion)
+            result.append(criterion)
+        return result
+
+    if "criteria" in value:
+        scope["criteria"] = criteria(value["criteria"])
+    else:
+        if not isinstance(value["groups"], list) or not value["groups"]:
+            raise Blocked("scenario groups must be a non-empty list")
+        groups = []
+        for group in value["groups"]:
+            if not isinstance(group, dict):
+                raise Blocked("each scenario group requires a title and criteria")
+            groups.append({
+                "title": require_text(group.get("title"), "scenario group title").strip(),
+                "criteria": criteria(group.get("criteria")),
+            })
+        if len({group["title"] for group in groups}) != len(groups):
+            raise Blocked("scenario group titles must be distinct")
+        scope["groups"] = groups
+    return scope
 
 
 def token(value, label):
@@ -263,7 +305,7 @@ class Project:
                     return self.receipt(snapshot, "already_frozen" if snapshot == versions[-1] else "historical_request")
             base = versions[-1] if versions else None
             if request["base_sha256"] != (base[1] if base else None):
-                raise Blocked("definition baseline changed; read the current snapshot")
+                raise Blocked("record snapshot changed; read the current snapshot")
             prior = base[2] if base else {"requirements": {}, "scenarios": {}}
             requirements, scenarios = prior["requirements"].copy(), prior["scenarios"].copy()
             authorizations = {}
@@ -280,8 +322,18 @@ class Project:
                         if not isinstance(selected, list) or not selected or len(set(selected)) != len(selected):
                             raise Blocked(f"scene {item_id} needs unique requirement IDs")
                         if any(name not in requirements for name in selected):
-                            raise Blocked(f"scene {item_id} references an unfrozen requirement")
+                            raise Blocked(f"scene {item_id} references a requirement missing from the baseline")
                         record["requirement_sha256"] = {name: digest(encoded(requirements[name])) for name in selected}
+                        previous_scene = collection.get(item_id, {})
+                        previous_scope = previous_scene.get("scenario_scope")
+                        if "scenario_scope" in item:
+                            scope = item["scenario_scope"]
+                            if previous_scope is not None and scope == previous_scope and record["source"] == previous_scene["source"]:
+                                record["scenario_scope"] = previous_scope
+                            else:
+                                record["scenario_scope"] = scenario_scope(scope)
+                        elif previous_scope is not None and record["source"] == previous_scene["source"]:
+                            record["scenario_scope"] = previous_scope
                     if item_id in collection and record != collection[item_id]:
                         authorizations[f"{key}:{item_id}"] = require_text(
                             item.get("revision_authorization"), f"explicit authorization to revise {item_id}"

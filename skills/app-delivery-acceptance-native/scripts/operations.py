@@ -7,6 +7,7 @@ import sys
 import uuid
 from pathlib import Path
 
+from case_design import current_designs, plan, scene_obligations
 from casework import debug, execute, history, manual, review
 from coverage_adapter import project_measure
 from coverage_python import measure_python, recompute
@@ -17,20 +18,21 @@ from records import Blocked, Project, acceptance_id, configure_io, digest, requi
 
 
 def match(project, identifier, request, definitions, path):
-    scene = definitions["scenarios"][request["scene"]]["source"]["text"]
+    design = current_designs(project, identifier, request["definitions_sha256"]).get(request["scene"])
+    if design:
+        planned, reference = design
+        if request.get("case_design") != reference["id"] or "obligations" in request:
+            raise Blocked("match against the current case design instead of redefining its obligations")
+        obligations = planned["obligations"]
+        kinds = {check["id"]: case["kind"] for case in planned["cases"].values() for check in case["checks"]}
+    elif request.get("case_design"):
+        raise Blocked("no current case design for this test scenario")
+    else:
+        obligations = scene_obligations(definitions, request["scene"], request["obligations"])
     inspected = request["inspected"]
     bindings = file_bindings(project, list(inspected)) if inspected else {}
     if inspected != bindings:
         raise Blocked("inspected test files changed before publishing")
-    obligations = {}
-    for item in request["obligations"]:
-        key = token(item["id"], "obligation id")
-        quote = require_text(item["quote"], "frozen scene quote")
-        if key in obligations or quote not in scene:
-            raise Blocked("obligations must have unique ids and exact frozen scene quotes")
-        obligations[key] = quote
-    if not obligations:
-        raise Blocked("enumerate the checks supported by the frozen scene")
     cases, supported = {}, set()
     for entry in request["cases"]:
         source = project.verified_source(entry["source"])
@@ -47,6 +49,8 @@ def match(project, identifier, request, definitions, path):
         for obligation, assertion in entry["covers"].items():
             if obligation not in obligations or require_text(assertion, "case assertion quote") not in source["text"]:
                 raise Blocked("case coverage must point to exact source and known obligation")
+            if design and kinds.get(obligation) != kind:
+                raise Blocked("implementation must match an assigned check and its verification kind")
             references[obligation] = assertion
         before = source["first"] - 1
         marker_text = source["text"]
@@ -80,6 +84,7 @@ def match(project, identifier, request, definitions, path):
         "status": "matched", "coverage": "full" if not missing else "partial" if supported else "none",
         "execution_status": "not_executed", "obligations": obligations, "cases": cases, "missing": missing,
         "bindings": bindings, "search_scope": require_text(request["search_scope"], "search scope"),
+        **({"case_design": reference} if design else {}),
     }
 
 
@@ -152,7 +157,7 @@ def coverage(project, identifier, request, definitions, path):
 
 
 OPERATIONS = {
-    "match": match, "runtime": runtime, "coverage": coverage,
+    "case-design": plan, "match": match, "runtime": runtime, "coverage": coverage,
     "debug": debug, "execute": execute, "review": review, "history": history,
     "manual": manual, "coverage-recompute": recompute, "tdd-red": red, "tdd-green": green,
     **RECORDED,

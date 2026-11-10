@@ -11,22 +11,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from casework import case_obligations, coverage_within
-from evidence import local, project_ref, requirement_scope, verify_bindings, verify_checkout
-from records import Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded, read_json, require_text, token
-
-
-def attempts(project, identifier, section):
-    folder = local(project, identifier, section)
-    found = []
-    for location in folder.glob("*/result.json"):
-        file = project.path(project_ref(project, location))
-        raw = file.read_bytes()
-        record = json.loads(raw)
-        if record["acceptance_id"] != identifier or record["operation"] != section:
-            raise Blocked("invalid attempt identity")
-        found.append((record, digest(raw)))
-    return sorted(found, key=lambda item: (item[0].get("recorded_at", ""), item[0]["request_id"]))
+from case_design import current_designs
+from casework import case_obligations, coverage_within, design_allows_execution
+from evidence import attempts, local, project_ref, requirement_scope, verify_bindings, verify_checkout
+from records import (
+    SCENARIO_LIST_PREFIX, Blocked, Project, acceptance_id, atomic_write, configure_io, digest, encoded,
+    read_json, require_text, token,
+)
 
 
 def intact(project, bindings):
@@ -62,7 +53,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     scenes = current["scenarios"]
     if selected is not None:
         if not isinstance(selected, list) or not selected or len(set(selected)) != len(selected) or not set(selected) <= scenes.keys():
-            raise Blocked("provide actual, distinct frozen scene IDs")
+            raise Blocked("provide distinct IDs of recorded test scenarios")
     result = {
         "acceptance_id": identifier, "manifest": manifest,
         "definitions": {"version": current["version"], "sha256": current_sha},
@@ -89,12 +80,18 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     execution.sort(key=lambda item: (item[0].get("recorded_at", ""), item[0]["request_id"]))
     opinions = [review for review, _ in attempts(project, identifier, "review") if review["status"] == "reviewed"]
     matched = [item for item, _ in attempts(project, identifier, "match") if item["status"] == "matched"]
+    designs = current_designs(project, identifier, current_sha)
     for scene, definition in scenes.items():
         fresh_cases, history, checklist, expected = {}, [], {}, set()
         preview_cases = set()
         case_design, current_runs, current_attempts, run_details = {}, {}, {}, {}
+        planned, design_reference = designs.get(scene, (None, None))
+        if planned:
+            checklist = planned["obligations"]
         for match in matched:
-            if match["scene"] == scene and match["definitions_sha256"] == current_sha:
+            if (match["scene"] == scene and match["definitions_sha256"] == current_sha
+                    and match.get("case_design") == design_reference
+                    and (not planned or intact(project, match["bindings"]))):
                 expected = set(match["cases"])
                 checklist = match["obligations"]
                 case_design = dict(match["cases"])
@@ -104,6 +101,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
                     candidate.get("scene") != scene or candidate["status"] != "debugged"
                     or (candidate.get("purpose") == "tdd-baseline") != (result.get("mode") == "development")
                     or candidate["definitions_sha256"] != current_sha or scene in invalidated
+                    or candidate.get("case_design") != design_reference or preview_cases.issuperset(candidate["cases"])
                     or not live_attempt(project, candidate) or not intact(project, candidate["artifacts"])
                 ):
                     continue
@@ -111,10 +109,18 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
                                if item["target_operation"] == "debug" and item["target_sha256"] == sha
                                and intact(project, item["artifacts"])), None)
                 for case, details in candidate["cases"].items():
-                    case_design[case] = {**case_design.get(case, {}), **details, "debug": candidate["request_id"],
-                                         "design_review": review["judgments"][case] if review else None}
-                preview_cases.update(candidate["cases"])
-                break
+                    if case in preview_cases:
+                        continue
+                    finding = review["judgments"][case] if review else None
+                    observed = candidate["results"][case].get("execution") or {}
+                    preparation = ("debug_pending_review" if finding is None else
+                                   "ready_for_execution" if design_allows_execution(finding) else "design_blocked")
+                    case_design[case] = {
+                        **case_design.get(case, {}), **details, "debug": candidate["request_id"],
+                        "design_review": finding, "preparation": preparation,
+                        "debug_exit_code": observed.get("exit_code"),
+                    }
+                    preview_cases.add(case)
         for run, sha in execution:
             baseline = run.get("purpose") == "tdd-baseline"
             if run.get("scene") != scene or not (baseline and run["status"] == "debugged" or run["status"] in {
@@ -123,6 +129,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
                 continue
             applicable = (
                 run["operation"] != "history" and scene not in invalidated and run["definitions_sha256"] == current_sha
+                and run.get("case_design") == design_reference
                 and live_attempt(project, run)
             )
             raw = run["artifacts"]
@@ -194,7 +201,7 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
                 "definition_sha256": run["definitions_sha256"],
                 "selection": run.get("selection", "historical"), "cases": run_cases,
             })
-            if result.get("mode") == "development":
+            if result.get("mode") == "development" and (not planned or applicable):
                 expected.update(run["cases"])
                 for case, details in run["cases"].items():
                     case_design[case] = {**case_design.get(case, {}), **details}
@@ -225,6 +232,10 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
             "definition": definition, "cases": fresh_cases, "history": history, "missing_obligations": missing,
             "status": scene_status, "case_design": case_design,
         }
+        if planned:
+            result["scenes"][scene]["case_plan"] = {
+                **design_reference, "cases": planned["cases"], "gaps": planned["gaps"],
+            }
         if dashboard:
             result["scenes"][scene].update(current_runs=current_runs, current_attempts=current_attempts, run_details=run_details)
     development_mode = result.get("mode") == "development"
@@ -268,6 +279,28 @@ def view(project, identifier, selected=None, *, dashboard=False, phase=None):
     return result
 
 
+def render_scenario_criteria(criteria, behavior):
+    content, current_tag = [], None
+    for criterion in criteria:
+        text = criterion.strip()
+        marker = SCENARIO_LIST_PREFIX.match(text)
+        value = text[marker.end():] if marker else text
+        if value == behavior.strip():
+            continue
+        number = marker.group("number") if marker else None
+        tag = "ol" if number else "ul"
+        if tag != current_tag:
+            if current_tag:
+                content.append(f"</{current_tag}>")
+            content.append(f"<{tag}>")
+            current_tag = tag
+        attr = f' value="{number}"' if number else ""
+        content.append(f"<li{attr}>{html.escape(value)}</li>")
+    if current_tag:
+        content.append(f"</{current_tag}>")
+    return content
+
+
 def render(snapshot, files):
     escape = lambda value: html.escape(str(value))
     labels = {
@@ -287,11 +320,29 @@ def render(snapshot, files):
 
     rows = []
     for scene, detail in snapshot["scenes"].items():
-        title = f"{scene} · {labels.get(detail['status'], detail['status'])}"
-        requirement_ids = ", ".join(detail["definition"]["requirement_sha256"])
+        definition = detail["definition"]
+        scope = definition.get("scenario_scope")
+        name = f"{scene} {scope['title']}" if scope else scene
+        title = f"{name} · {labels.get(detail['status'], detail['status'])}"
+        requirement_ids = ", ".join(definition["requirement_sha256"])
         content = [f"<h2>{escape(title)}</h2><p>关联需求 {escape(requirement_ids)}</p>"]
-        definition_text = detail["definition"]["source"]["text"]
-        content.append(f"<details><summary>冻结场景原文</summary><pre>{escape(definition_text)}</pre></details>")
+        if scope:
+            content.append(f"<h3>验证范围</h3><p>{escape(scope['behavior'])}</p><h3>验收判据</h3>")
+            for group in scope.get("groups", [scope]):
+                if "groups" in scope:
+                    content.append(f"<h4>{escape(group['title'])}</h4>")
+                content.extend(render_scenario_criteria(group["criteria"], scope["behavior"]))
+        definition_text = definition["source"]["text"]
+        content.append(f"<details><summary>测试场景原文</summary><pre>{escape(definition_text)}</pre></details>")
+        plan = detail.get("case_plan", {})
+        for name, case in plan.get("cases", {}).items():
+            content.append(f"<details><summary>{escape(name)} · {escape(case['title'])}</summary>"
+                           f"<p>前置条件与数据　{escape(case['preconditions'])}</p><ul>")
+            for step in case["checks"]:
+                content.append(f"<li>{escape(step['id'])}　操作 {escape(step['action'])}　预期 {escape(step['expected'])}</li>")
+            content.append("</ul></details>")
+        for check, reason in plan.get("gaps", {}).items():
+            content.append(f"<p>设计缺口　{escape(check)} · {escape(reason)}</p>")
         content.append("<table><thead><tr><th>用例</th><th>执行</th><th>覆盖率</th><th>独立复审</th><th>证据</th></tr></thead><tbody>")
         for case, item in sorted(detail["cases"].items()):
             verdict = labels.get(item["status"], item["status"])
@@ -339,7 +390,7 @@ def render(snapshot, files):
         requirements.append(f"<details><summary>{escape(name)} · {escape(verdict)}</summary>"
                             f"<pre>{escape(item['source']['text'])}</pre>{review}</details>")
     identifier = escape(snapshot["acceptance_id"])
-    version = escape((snapshot["definitions"] or {}).get("version", "未冻结"))
+    version = f"记录快照 v{escape(snapshot['definitions']['version'])}" if snapshot["definitions"] else "尚未记录需求基线"
     return (
         '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>交付验收 · {identifier}</title><style>"
@@ -348,8 +399,8 @@ def render(snapshot, files):
         "table{width:100%;border-collapse:collapse;margin:16px 0}th,td{text-align:left;padding:10px;border-bottom:1px solid #d7dfed;overflow-wrap:anywhere}"
         "a{color:#164ba5;margin-right:8px}pre{white-space:pre-wrap}summary{cursor:pointer}h1,h2{line-height:1.25}"
         "</style>"
-        f"<main><h1>交付验收 · {identifier}</h1><p>冻结定义 v{version} · <a href=\"snapshot.json\">结果快照</a></p>"
-        f"<h2>冻结需求</h2>{''.join(requirements)}{''.join(rows)}</main></html>\n"
+        f"<main><h1>交付验收 · {identifier}</h1><p>{version} · <a href=\"snapshot.json\">结果快照</a></p>"
+        f"<h2>需求基线</h2>{''.join(requirements)}{''.join(rows)}</main></html>\n"
     )
 
 
@@ -364,7 +415,7 @@ def export_report(project, identifier, request):
                 raise Blocked("report request already binds a different selection")
             exported = {project_ref(project, target / name): sha for name, sha in stored["exported_sha256"].items()}
             if not intact(project, exported):
-                raise Blocked("frozen report files changed")
+                raise Blocked("saved report files changed")
         else:
             snapshot = view(project, identifier, selection)
             target.parent.mkdir(parents=True, exist_ok=True)

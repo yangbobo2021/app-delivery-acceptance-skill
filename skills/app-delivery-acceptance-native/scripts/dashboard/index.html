@@ -33,6 +33,9 @@
           <label>状态<select id="filter">
             <option value="">全部状态</option>
             <option value="not_executed">未执行</option>
+            <option value="debug_pending_review">已调试 · 待设计复审</option>
+            <option value="design_blocked">已调试 · 复审未放行</option>
+            <option value="ready_for_execution">已调试 · 待正式执行</option>
             <option value="pending_review">待独立复审</option>
             <option value="passed">通过</option>
             <option value="product_defect">产品缺陷</option>
@@ -42,7 +45,7 @@
       </div>
       <div class="table-scroll" tabindex="0" aria-label="五列追踪表">
         <table>
-          <thead><tr><th scope="col">需求 / 规则</th><th scope="col">测试场景</th><th scope="col">用例 / 操作</th><th scope="col">实际执行</th><th scope="col">独立复审</th></tr></thead>
+          <thead><tr><th scope="col">需求 / 规则</th><th scope="col">测试场景</th><th scope="col">用例</th><th scope="col">实际执行</th><th scope="col">独立复审</th></tr></thead>
           <tbody id="rows"><tr><td colspan="5">正在读取记录</td></tr></tbody>
         </table>
       </div>
@@ -50,7 +53,11 @@
   </main>
   <dialog id="detail" aria-labelledby="detail-title">
     <div class="dialog-top">
-      <div><button id="back" type="button" hidden>← 返回</button><h2 id="detail-title">详情</h2></div>
+      <div>
+        <button id="back" type="button" hidden>← 返回</button>
+        <p id="detail-meta" class="muted" hidden></p>
+        <h2 id="detail-title">详情</h2>
+      </div>
       <form method="dialog"><button id="close-detail" autofocus>关闭</button></form>
     </div>
     <div id="detail-update" class="notice" hidden>

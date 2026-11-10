@@ -28,12 +28,12 @@ def scoped(project, identifier, request):
     project.manifest(identifier)
     versions = project.versions(identifier)
     if not versions or versions[-1][1] != request["definitions_sha256"]:
-        raise Blocked("operation requires the current frozen definitions")
+        raise Blocked("operation requires the current record snapshot")
     current = versions[-1]
     if "scene" in request:
         scene = token(request["scene"], "scene id")
         if scene not in current[2]["scenarios"]:
-            raise Blocked(f"unknown frozen scene: {scene}")
+            raise Blocked(f"unknown test scenario: {scene}")
         if scene in project.receipt(current, "current")["scenes_needing_revalidation"]:
             raise Blocked(f"scene {scene} needs revalidation against changed requirements")
     return current[2]
@@ -66,6 +66,18 @@ def local(project, identifier, *parts):
 
 def project_ref(project, path):
     return path.relative_to(project.root).as_posix()
+
+
+def attempts(project, identifier, section):
+    folder = local(project, identifier, section)
+    found = []
+    for location in folder.glob("*/result.json"):
+        raw = project.path(project_ref(project, location)).read_bytes()
+        record = json.loads(raw)
+        if record["acceptance_id"] != identifier or record["operation"] != section:
+            raise Blocked("invalid attempt identity")
+        found.append((record, digest(raw)))
+    return sorted(found, key=lambda item: (item[0].get("recorded_at", ""), item[0]["request_id"]))
 
 
 def argv(value):
@@ -139,7 +151,7 @@ def terminate(process):
 
 def publish_index(project, identifier, record, raw):
     section = record["operation"]
-    if section in {"match", "debug"}:
+    if section in {"case-design", "match", "debug"}:
         root = "cases"
     elif section in {"execute", "manual", "history", "review"}:
         root = "records"

@@ -5,7 +5,7 @@
 用 [操作工具](../../scripts/operations.py) 执行 `runtime <AT-ID>`，通过 stdin 提交：
 
 ```json
-{"request_id":"runtime-1","definitions_sha256":"<当前摘要>","files":["app/booking.py","tests/check_s1.py"],"command":["<实际 Python>","tests/check_s1.py"],"timeout":60}
+{"request_id":"runtime-1","definitions_sha256":"<当前记录快照摘要>","files":["app/booking.py","tests/check_s1.py"],"command":["<实际 Python>","tests/check_s1.py"],"timeout":60}
 ```
 
 只有真实命令正常结束且绑定文件仍适用，才可使用 `ready` 收据。核对 stdout 中的业务或运行信号，退出 0 只能表示命令正常返回。
@@ -15,7 +15,7 @@
 对 Python 项目，`coverage <AT-ID>` 使用项目确认的解释器及 coverage.py。使用支持 `patch = subprocess` 的安装版本。必要的依赖准备须符合项目约定和权限。用真实会启动被测进程的探测命令，指定该进程中的应命中源码行，避免只观察测试父进程。
 
 ```json
-{"request_id":"coverage-1","definitions_sha256":"<当前摘要>","runtime":"runtime-1","source_roots":["app"],"command":["<含 coverage.py 的 Python>","tests/check_s1.py"],"observe":{"path":"app/booking.py","line":35},"timeout":60}
+{"request_id":"coverage-1","definitions_sha256":"<当前记录快照摘要>","runtime":"runtime-1","source_roots":["app"],"command":["<含 coverage.py 的 Python>","tests/check_s1.py"],"observe":{"path":"app/booking.py","line":35},"timeout":60}
 ```
 
 记录工具实际运行 coverage.py，合并其进程数据并保存原生 JSON。指定产品行实际命中、分支采集已启用且探测正常完成时才交付就绪。对未支持的工具链，保留项目发现和实际缺口。用户要求覆盖时，用例生成与正式执行等待就绪收据。

@@ -1,16 +1,16 @@
 # 验收生命周期
 
-以用户所需的操作和停止点为准。[定义](../definitions/entry.md)、[用例准备](../case-preparation/entry.md)和[执行](../execution/entry.md)各自处理本领域。以下操作都使用实际验收 ID 与当前项目根。
+以用户所需的操作和停止点为准。[需求基线与测试场景](../definitions/entry.md)、[用例准备](../case-preparation/entry.md)和[执行](../execution/entry.md)各自处理本领域。以下操作都使用实际验收 ID 与当前项目根。
 
 ## 分析、设计与版本
 
-用 [操作工具](../../scripts/operations.py) 通过 stdin 接收 JSON。每项带唯一 `request_id` 和 `definitions_sha256`，指定场景时加 `scene`。必要的定义先由用户授权冻结。需新建场景时，根据需求和项目约定编写候选文件，保持原义务和相邻场景；仅设计时交付候选，用户授权后用定义工具的 `source` 和 `freeze` 发布新版本。
+用 [操作工具](../../scripts/operations.py) 通过 stdin 接收 JSON。每项带唯一 `request_id` 和 `definitions_sha256`，指定场景时加 `scene`。先记录用户确认的需求基线。需新建场景时，根据基线和项目约定编写候选文件，保留原义务及相邻场景。仅设计时按用户要求交付候选。任务包含保存场景时，用记录工具的 `source` 和兼容命令 `freeze` 保存变更。
 
 | 操作 | 实际输入及停止点 |
 | --- | --- |
 | `analyze` | `requirement_ids` 及基于原文写成的 `analysis`。保留组别、必要条件、范围及待确认项。只交分析。 |
 | `assess-scenarios` | 实际 `scene`、独立 `reviewer_session` 和 `review_file`。让 Reviewer 按原样保存 `{"scenes":{"SC1":{"status":"passed","reason":"实际依据"}}}` 到约定意见路径。 |
-| `reverse` | 本机已有的提交或 PR 分支 `revision`。工具保存实际 Git 差异，Agent 据此给需求候选和待确认问题。原始业务冻结按单独授权处理。 |
+| `reverse` | 本机已有的提交或 PR 分支 `revision`。工具保存实际 Git 差异，Agent 据此给需求候选和待确认问题。将候选纳入需求基线前，取得用户确认。 |
 | `change-plan` | `previous_sha256`、`intent`（`follow_history`、`complete_change_acceptance`、`design_only`）。交付受影响范围和拟复验项。 |
 | `rebind` | 用户已选 checkout 的实际完整 `revision` 和需绑定的 `files`。默认核对当前 HEAD。用户授权建立隔离候选时，传 `workspace: true`，工具创建并核对新的 Git worktree，保留原工作区和旧记录。将实际 `rebind` ID 交给运行准备。 |
 | `project` | 真实的 `runtime`、`coverage` 或 `coverage_basis`、可选的 `rebind`，以及实际 `test_roots` 和 `guide`。基于已验证环境写运行指南。 |
