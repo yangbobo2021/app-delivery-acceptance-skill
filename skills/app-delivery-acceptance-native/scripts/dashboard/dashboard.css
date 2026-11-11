@@ -58,7 +58,8 @@ td li + li { margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf1f6; }
 .badge[data-status="passed"] { background: #e3f5ec; color: #17523f; }
 .badge[data-status="product_defect"], .badge[data-status="evidence_missing"], .badge[data-status="failed"] { background: #feece8; color: #923626; }
 .badge[data-status="pending_review"], .badge[data-status="pending_delivery_review"], .badge[data-status="blocked"],
-.badge[data-status="debug_pending_review"], .badge[data-status="design_blocked"] { background: #fff1d5; color: #76510c; }
+.badge[data-status="debug_pending_review"], .badge[data-status="design_blocked"],
+.badge[data-status="rematch_required"] { background: #fff1d5; color: #76510c; }
 #detail { width: min(740px, calc(100% - 32px)); max-height: 88dvh; padding: 0; border: 1px solid #ccd9e4; border-radius: 14px; color: inherit; overflow: hidden; }
 #detail[open] { display: flex; flex-direction: column; }
 #detail::backdrop { background: #17283e85; }

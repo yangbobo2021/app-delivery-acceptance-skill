@@ -145,7 +145,7 @@ class OperationsTests(unittest.TestCase):
 
         request = {
             "request_id": "design", "scene": "SC1",
-            "cases": {"D-reject": {
+            "cases": {"TC-reject": {
                 "title": "拒绝重叠预约", "kind": "automated",
                 "preconditions": "A 室已有 10:00–11:00 的预约",
                 "checks": [{"id": "reject", "action": "提交 10:30–11:30 的预约", "expected": "返回 409"}],
@@ -178,7 +178,7 @@ class OperationsTests(unittest.TestCase):
             "request_id": "grouped-design", "scene": "SC1",
             "obligations": [{"id": "reject", "quote": groups[0]["criteria"][0]},
                             {"id": "preserve", "quote": groups[1]["criteria"][0]}],
-            "cases": {"D-reject": {
+            "cases": {"TC-reject": {
                 "title": "拒绝重叠预约", "kind": "automated", "preconditions": "会议室已有预约",
                 "checks": [{"id": "reject", "action": "提交重叠预约", "expected": "返回 409"}],
             }},
@@ -203,7 +203,7 @@ class OperationsTests(unittest.TestCase):
                 {"id": "reject", "quote": "第二次响应 JSON status 必须为 409"},
                 {"id": "preserve", "quote": "所有字段和值均不变"},
             ],
-            "cases": {"D-conflict": {
+            "cases": {"TC-conflict": {
                 "title": "重叠预约与状态保护", "kind": "automated",
                 "preconditions": "A 室已有一条预约",
                 "checks": [
@@ -216,8 +216,8 @@ class OperationsTests(unittest.TestCase):
         plan = self.operation("case-design", design_request)
         self.assertEqual(test.read_text(), original)
         self.assertEqual(plan["missing"], [])
-        self.assertEqual([step["id"] for step in plan["cases"]["D-conflict"]["checks"]], ["reject", "preserve"])
-        self.assertEqual(plan["cases"]["D-conflict"]["checks"][0], design_request["cases"]["D-conflict"]["checks"][0])
+        self.assertEqual([step["id"] for step in plan["cases"]["TC-conflict"]["checks"]], ["reject", "preserve"])
+        self.assertEqual(plan["cases"]["TC-conflict"]["checks"][0], design_request["cases"]["TC-conflict"]["checks"][0])
         local = self.root / ".acceptance-local/native-v1" / self.id
         self.assertEqual({folder.name for folder in local.iterdir()}, {"case-design"})
         snapshot = self.run_json("results", ["view", self.id], None, 0)
@@ -231,15 +231,18 @@ class OperationsTests(unittest.TestCase):
             return {
                 "request_id": request_id, "scene": "SC1", "case_design": "design-v1",
                 "search_scope": path, "inspected": {path: source["sha256"]},
-                "cases": [{"selector": "main", "status": "active", "source": source, "covers": assertions}],
+                "cases": [{"case_id": "TC-conflict", "selector": "main", "status": "active", "source": source, "covers": assertions}],
             }
 
         assertions = {"reject": "assert rejected['status'] == 409"}
         request = match_request("partial", assertions)
         self.operation("match", {**request, "request_id": "redefine", "obligations": design_request["obligations"]}, 2)
+        self.operation("match", {**request, "request_id": "unknown-id",
+                                 "cases": [{**request["cases"][0], "case_id": "TC-unknown"}]}, 2)
         partial = self.operation("match", request)
         self.assertEqual((partial["coverage"], partial["missing"]), ("partial", ["preserve"]))
         case_id, = partial["cases"]
+        self.assertEqual(case_id, "TC-conflict")
         self.runtime()
         candidate = {
             "request_id": "debug-v1", "scene": "SC1", "runtime": "runtime", "match": "partial",
@@ -261,9 +264,12 @@ class OperationsTests(unittest.TestCase):
         self.addCleanup(stop_server)
         url = json.loads(server.stdout.readline())["url"]
 
-        def check_preparation(expected):
+        def dashboard_scene():
             with urllib.request.urlopen(url + "snapshot.json", timeout=5) as response:
-                preview = json.load(response)["scenes"]["SC1"]
+                return json.load(response)["scenes"]["SC1"]
+
+        def check_preparation(expected):
+            preview = dashboard_scene()
             self.assertEqual(preview["case_design"][case_id]["preparation"], expected)
             self.assertEqual(preview["case_design"][case_id]["debug_exit_code"], 0)
             self.assertEqual(preview["cases"][case_id]["status"], "not_executed")
@@ -307,12 +313,109 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["case_plan"]["sha256"], run["case_design"]["sha256"])
 
+        same_design = match_request("changed-association", {**assertions, "preserve": state_assertion})
+        same_design["cases"][0]["selector"] = "a different selection"
+        self.operation("match", same_design)
+        changed = dashboard_scene()
+        self.assertEqual(changed["cases"][case_id]["status"], "not_executed")
+        self.assertEqual(changed["history"][-1]["cases"][case_id]["status"], "stale")
+        self.assertNotIn("preparation", changed["case_design"][case_id])
+
         self.operation("case-design", {**design_request, "request_id": "design-v2"})
         self.operation("execute", {**execute, "request_id": "formal-old-design", "design_review": "implementation-passed"}, 2)
         result = self.run_json("results", ["view", self.id], None, 0)["scenes"]["SC1"]
         self.assertEqual(result["case_plan"]["id"], "design-v2")
         self.assertEqual(result["history"][-1]["cases"][case_id]["status"], "stale")
         self.assertNotEqual(result["status"], "passed")
+        self.assertNotIn("previous_case_matches", result)
+        pending = dashboard_scene()
+        self.assertEqual(set(pending["previous_case_matches"]), {case_id})
+        self.assertEqual(pending["previous_case_matches"][case_id]["covers"], full["cases"][case_id]["covers"])
+        self.assertEqual(pending["cases"], {})
+        self.assertEqual(pending["case_design"], {})
+        self.assertCountEqual(pending["missing_obligations"], ["reject", "preserve"])
+
+        revised_match = {**match_request("rematched", {**assertions, "preserve": state_assertion}),
+                         "case_design": "design-v2"}
+        self.operation("match", revised_match)
+        refreshed = dashboard_scene()
+        self.assertNotIn("previous_case_matches", refreshed)
+        self.assertEqual(refreshed["cases"][case_id]["status"], "not_executed")
+
+    def test_formal_execution_requires_current_associations_for_selected_cases(self):
+        path = "tests/check_s1.py"
+        test = self.root / path
+        assertion = "assert call(db, 'list') == before"
+        test.write_text(test.read_text().replace("        rejected =", "        before = call(db, 'list')\n        rejected =")
+                        .replace("        print('SC1", f"        {assertion}\n        print('SC1"))
+        source = self.record("source", path, "1", str(len(test.read_text().splitlines())))
+        checks = {
+            "TC-conflict": ("reject", "第二次响应 JSON status 必须为 409", "assert rejected['status'] == 409"),
+            "TC-preserve": ("preserve", "所有字段和值均不变", assertion),
+        }
+        self.operation("case-design", {
+            "request_id": "design", "scene": "SC1",
+            "obligations": [{"id": check, "quote": quote} for check, quote, _ in checks.values()],
+            "cases": {case: {"title": check, "kind": "automated", "preconditions": "已有一条预约",
+                             "checks": [{"id": check, "action": "提交重叠预约", "expected": quote}]}
+                      for case, (check, quote, _) in checks.items()},
+        })
+        self.runtime()
+
+        def match(key, conflict_selector):
+            return self.operation("match", {
+                "request_id": key, "scene": "SC1", "case_design": "design",
+                "search_scope": path, "inspected": {path: source["sha256"]},
+                "cases": [{"case_id": case, "status": "active", "source": source,
+                           "selector": conflict_selector if case == "TC-conflict" else "preserve",
+                           "covers": {check: code}} for case, (check, _, code) in checks.items()],
+            })
+
+        def review(attempt, key, cases):
+            return self.operation("review", {
+                "request_id": key, "scene": "SC1", "target_operation": attempt["operation"],
+                "target": attempt["request_id"],
+                "target_sha256": hashlib.sha256((self.root / attempt["record"]).read_bytes()).hexdigest(),
+                "reviewer_session": "fixture-reviewer",
+                "raw_review": json.dumps({"cases": {case: {"status": "passed", "reason": "fixture opinion",
+                                                            "covers": [checks[case][0]]} for case in cases}}),
+            })
+
+        def approve(key, matching, cases):
+            debug = self.operation("debug", {
+                "request_id": key + "-debug", "scene": "SC1", "match": matching, "runtime": "runtime",
+                "coverage_policy": "off", "coverage_basis": "isolated fixture",
+                "cases": {case: {"command": [sys.executable, path], "files": [path]} for case in cases},
+            })
+            return review(debug, key, cases)["request_id"]
+
+        def execute(key, approval, cases, expected_code=0):
+            return self.operation("execute", {"request_id": key, "scene": "SC1", "design_review": approval,
+                                              "selected_case_ids": cases}, expected_code)
+
+        original = match("original", "main")
+        old_approval = approve("old-review", "original", list(checks))
+        updated = match("updated", "different selection")
+        self.assertNotEqual(original["implementation_sha256"]["TC-conflict"], updated["implementation_sha256"]["TC-conflict"])
+        self.assertEqual(original["implementation_sha256"]["TC-preserve"], updated["implementation_sha256"]["TC-preserve"])
+
+        stale = execute("stale", old_approval, list(checks), 2)
+        self.assertEqual(stale["status"], "blocked")
+        self.assertIn("TC-conflict", stale["reason"])
+        self.assertNotIn("TC-preserve", stale["reason"])
+        self.assertNotIn("results", stale)
+        self.assertFalse(any(item.is_dir() for item in (self.root / stale["record"]).parent.iterdir()))
+
+        unchanged = execute("unchanged", old_approval, ["TC-preserve"])
+        self.assertEqual(unchanged["results"]["TC-preserve"]["execution"]["exit_code"], 0)
+        review(unchanged, "unchanged-reviewed", ["TC-preserve"])
+        refreshed_approval = approve("new-review", "updated", ["TC-conflict"])
+        refreshed = execute("refreshed", refreshed_approval, ["TC-conflict"])
+        self.assertEqual(refreshed["results"]["TC-conflict"]["execution"]["exit_code"], 0)
+        review(refreshed, "refreshed-reviewed", ["TC-conflict"])
+        scene = self.run_json("results", ["view", self.id], None, 0)["scenes"]["SC1"]
+        self.assertEqual(scene["status"], "passed")
+        self.assertEqual({case: row["status"] for case, row in scene["cases"].items()}, dict.fromkeys(checks, "passed"))
 
     def review_attempt(self, attempt, key, decision):
         return self.operation("review", {

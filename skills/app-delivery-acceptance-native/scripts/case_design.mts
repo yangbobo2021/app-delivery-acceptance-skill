@@ -1,5 +1,5 @@
 /** Natural-language case design, independent of implementation. */
-import { attempts } from "./evidence.mts";
+import { attempts, bindingsIntact } from "./evidence.mts";
 import { Blocked, Project, compareText, equal, requireText, token, type RecordData } from "./records.mts";
 
 export function sceneObligations(definitions: RecordData, scene: string, items: RecordData[]) {
@@ -21,7 +21,9 @@ export function plan(_project: Project, _id: string, request: RecordData, defini
   const obligations = sceneObligations(definitions, request.scene, request.obligations);
   const assigned = new Set<string>();
   const cases = Object.fromEntries(Object.entries<RecordData>(request.cases).map(([name, item]) => {
-    token(name, "case design id");
+    if (!token(name, "case id").startsWith("TC-") || name === "TC-") {
+      throw new Blocked("assign each designed case a TC- id");
+    }
     const { kind, checks } = item;
     if (!["automated", "manual"].includes(kind)) throw new Blocked("design kind must be automated or manual");
     if (!Array.isArray(checks) || !checks.length) throw new Blocked("supply the checks in their intended order");
@@ -46,7 +48,7 @@ export function plan(_project: Project, _id: string, request: RecordData, defini
   const missing = Object.keys(obligations).filter(key => !assigned.has(key)).sort(compareText);
   const gaps = request.gaps ?? {};
   if (!equal(Object.keys(gaps).sort(compareText), missing)) throw new Blocked("give a reason for each obligation without a case design");
-  return { status: "designed", obligations, cases, missing,
+  return { status: "designed", case_identity: "design", obligations, cases, missing,
     gaps: Object.fromEntries(missing.map(key => [key, requireText(gaps[key], "design gap reason")])) };
 }
 export function currentDesigns(project: Project, id: string, definitionsSha: string) {
@@ -57,4 +59,20 @@ export function currentDesigns(project: Project, id: string, definitionsSha: str
 export function requireCurrentDesign(project: Project, id: string, request: RecordData, reference: RecordData | null | undefined) {
   const current = currentDesigns(project, id, request.definitions_sha256).get(request.scene);
   if (!equal(reference ?? null, current?.[1] ?? null)) throw new Blocked("use the current case design for this test scenario");
+  return current;
+}
+
+export function caseMatches(project: Project, matches: RecordData[], scene: string, definitionsSha: string,
+  design?: readonly [RecordData, RecordData]) {
+  const scoped = matches.filter(row => row.status === "matched" && row.scene === scene && row.definitions_sha256 === definitionsSha);
+  return {
+    current: scoped.findLast(match => equal(match.case_design ?? null, design?.[1] ?? null) &&
+      (!design || bindingsIntact(project, match.bindings))),
+    previous: scoped.findLast(match => match.case_design),
+  };
+}
+
+export function currentCaseImplementation(match: RecordData | undefined, attempt: RecordData, caseId: string) {
+  const sha = match?.implementation_sha256?.[caseId];
+  return typeof sha === "string" && sha === attempt.implementation_sha256?.[caseId];
 }

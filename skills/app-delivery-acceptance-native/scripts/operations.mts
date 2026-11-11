@@ -8,7 +8,7 @@ import { projectMeasure } from "./coverage_adapter.mts";
 import { measurePython, recompute } from "./coverage_python.mts";
 import { argv, capture, fileBindings, projectRef, recorded, requestedTimeout, upstream, verifyBindings, type Operation } from "./evidence.mts";
 import { green, matchTddCase, red } from "./tdd.mts";
-import { Blocked, Project, acceptanceId, argsFor, compareText, digest, equal, requireText, resolvedFile, runCli, stdinJson, type RecordData } from "./records.mts";
+import { Blocked, Project, acceptanceId, argsFor, compareText, digest, encoded, equal, requireText, resolvedFile, runCli, stdinJson, token, type RecordData } from "./records.mts";
 
 function stableCaseId(name: string) {
   const urlNamespace = Buffer.from("6ba7b8119dad11d180b400c04fd430c8", "hex");
@@ -20,6 +20,7 @@ function stableCaseId(name: string) {
 }
 export function match(project: Project, id: string, request: RecordData, definitions: RecordData) {
   const design = currentDesigns(project, id, request.definitions_sha256).get(request.scene);
+  const identified = design?.[0].case_identity === "design" ? design[0].cases : null;
   let obligations: RecordData, kinds: Map<string, string> | undefined;
   if (design) {
     const [planned, reference] = design;
@@ -43,11 +44,16 @@ export function match(project: Project, id: string, request: RecordData, definit
     const selector = requireText(entry.selector, "test selector"), status = entry.status, kind = entry.kind ?? "automated";
     if (!["active", "skipped"].includes(status)) throw new Blocked("case status must be active or skipped");
     if (!["automated", "manual"].includes(kind)) throw new Blocked("case kind must be automated or manual");
+    const designedId = identified ? token(entry.case_id, "designed case id") : undefined;
+    const planned = identified && designedId && Object.hasOwn(identified, designedId) ? identified[designedId] : undefined;
+    if (identified && planned?.kind !== kind) throw new Blocked("use a current designed case id and its verification kind");
+    const assigned = new Set(planned?.checks.map((check: RecordData) => check.id));
     const references = Object.fromEntries(Object.entries(entry.covers).map(([obligation, assertion]) => {
       if (!Object.hasOwn(obligations, obligation) || !source.text.includes(requireText(assertion, "case assertion quote"))) {
         throw new Blocked("case coverage must point to exact source and known obligation");
       }
       if (kinds && kinds.get(obligation) !== kind) throw new Blocked("implementation must match an assigned check and its verification kind");
+      if (planned && !assigned.has(obligation)) throw new Blocked("implementation can only cover checks assigned to its designed case id");
       return [obligation, assertion];
     }));
     const before = source.first - 1;
@@ -59,10 +65,11 @@ export function match(project: Project, id: string, request: RecordData, definit
       if (kind !== "automated") throw new Blocked("TDD identity applies to an automated test");
       const [priorId, receipt] = matchTddCase(project, id, definitions, request.scene, source, entry.tdd_case);
       if (identity && identity !== priorId) throw new Blocked("test source marker conflicts with the TDD case id");
+      if (designedId && designedId !== priorId) throw new Blocked("use the original TDD case id in the case design");
       identity = priorId;
       provenance = receipt;
     }
-    identity ??= stableCaseId(source.path + ":" + selector);
+    identity = designedId ?? identity ?? stableCaseId(source.path + ":" + selector);
     if (cases.has(identity)) throw new Blocked("duplicate case id: " + identity);
     cases.set(identity, { source, selector, status, covers: references,
       ...(provenance ? { tdd_case: provenance } : {}), ...(kind === "manual" ? { kind } : {}) });
@@ -71,6 +78,8 @@ export function match(project: Project, id: string, request: RecordData, definit
   const missing = Object.keys(obligations).filter(key => !supported.has(key)).sort(compareText);
   return { status: "matched", coverage: !missing.length ? "full" : supported.size ? "partial" : "none", execution_status: "not_executed",
     obligations, cases: Object.fromEntries(cases), missing, bindings, search_scope: requireText(request.search_scope, "search scope"),
+    ...(identified ? { implementation_sha256: Object.fromEntries([...cases].map(([key, item]) =>
+      [key, digest(encoded(item))])) } : {}),
     ...(design ? { case_design: design[1] } : {}) };
 }
 export async function runtime(project: Project, id: string, request: RecordData, _definitions: RecordData, path: string) {

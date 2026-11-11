@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 from booking_fixture import prepare_booking
@@ -65,9 +66,11 @@ def run(output, original, writer):
     operation("analyze", {"request_id": "scope", "requirement_ids": ["R1"], "analysis": "按场景核对已确认的范围。",
                          "scope_review": {"baseline_sha256": frozen["sha256"], "scenario_ids": ["SC1"]}})
     scene = {"scene": "SC1"}
+    stable_id = "TC-" + str(uuid.uuid5(uuid.NAMESPACE_URL, "tests/check_s1.py:main"))
+    designed_id = "D-reject" if writer == "python" else stable_id
     operation("case-design", {
         **scene, "request_id": "design", "obligations": [{"id": "reject", "quote": "同一会议室的重叠预约返回 409。"}],
-        "cases": {"D-reject": {"title": "拒绝重叠预约", "kind": "automated", "preconditions": "已有预约",
+        "cases": {designed_id: {"title": "拒绝重叠预约", "kind": "automated", "preconditions": "已有预约",
                               "checks": [{"id": "reject", "action": "提交重叠时段", "expected": "返回 409"}]}},
     })
     records = [sys.executable, original / "records.py"] if writer == "python" else ["node", SCRIPTS / "records.mts"]
@@ -77,6 +80,7 @@ def run(output, original, writer):
         **scene, "request_id": "match", "case_design": "design", "search_scope": "现有预约集成用例",
         "inspected": {test: source["sha256"]},
         "cases": [{"selector": "main", "status": "active", "source": source,
+                   **({"case_id": stable_id} if writer == "typescript" else {}),
                    "covers": {"reject": "assert rejected['status'] == 409"}}],
     })
     case_id, = match["cases"]

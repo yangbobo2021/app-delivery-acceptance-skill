@@ -3,23 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:f
 import { createServer } from "node:http";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { currentDesigns } from "./case_design.mts";
+import { caseMatches, currentCaseImplementation, currentDesigns } from "./case_design.mts";
 import { caseObligations, coverageWithin, designAllowsExecution } from "./casework.mts";
-import { attempts, local, projectRef, requirementScope, verifyBindings, verifyCheckout } from "./evidence.mts";
+import { attempts, bindingsIntact as intact, local, projectRef, requirementScope, verifyCheckout } from "./evidence.mts";
 import {
   Blocked, NAMESPACE, Project, SCENARIO_LIST_PREFIX, acceptanceId, argsFor, atomicWrite, compareText, digest, displayJson, encoded,
   equal, exists, inheritJsonNumbers, integer, isIntegerField, printJson, readJson, requireText, runCli, stat, stdinJson, token, type RecordData,
 } from "./records.mts";
 
-function intact(project: Project, bindings?: Record<string, string>) {
-  try {
-    if (bindings && Object.keys(bindings).length) verifyBindings(project, bindings);
-    return true;
-  } catch (error) {
-    if (error instanceof Blocked || (error as NodeJS.ErrnoException).code) return false;
-    throw error;
-  }
-}
 function liveAttempt(project: Project, run: RecordData) {
   try {
     verifyCheckout(project, run);
@@ -68,21 +59,19 @@ export function view(project: Project, id: string, selected: string[] | null = n
   }
   execution.sort(([a], [b]) => compareText(a.recorded_at ?? "", b.recorded_at ?? "") || compareText(a.request_id, b.request_id));
   const opinions = attempts(project, id, "review").map(([row]) => row).filter(row => row.status === "reviewed");
-  const matched = attempts(project, id, "match").map(([row]) => row).filter(row => row.status === "matched");
+  const matched = attempts(project, id, "match").map(([row]) => row);
   const designs = currentDesigns(project, id, currentSha);
   for (const [scene, definition] of Object.entries<RecordData>(scenes)) {
     const fresh = new Map<string, RecordData>(), history: RecordData[] = [], preview = new Set<string>();
     const currentRuns = new Map<string, string>(), currentAttempts = new Map<string, string>(), runDetails = new Map<string, RecordData>();
-    const [planned, reference] = designs.get(scene) ?? [null, null];
-    let checklist = planned?.obligations ?? {}, expected = new Set<string>(), caseDesign = new Map<string, RecordData>();
-    for (const match of matched) {
-      if (match.scene === scene && match.definitions_sha256 === currentSha &&
-          equal(match.case_design ?? null, reference) && (!planned || intact(project, match.bindings))) {
-        expected = new Set(Object.keys(match.cases));
-        checklist = match.obligations;
-        caseDesign = new Map(Object.entries(match.cases));
-      }
-    }
+    const design = designs.get(scene), [planned, reference] = design ?? [null, null];
+    const stableIds = planned?.case_identity === "design";
+    const { current: match, previous: lastMatch } = caseMatches(project, matched, scene, currentSha, design);
+    let checklist = match ? match.obligations : planned?.obligations ?? {};
+    const expected = new Set(Object.keys(match?.cases ?? {}));
+    const caseDesign = new Map(Object.entries<RecordData>(match?.cases ?? {}));
+    const currentImplementation = (attempt: RecordData, name: string) =>
+      !stableIds || currentCaseImplementation(match, attempt, name);
     if (dashboard) {
       for (const [candidate, sha] of debugged.toReversed()) {
         if (candidate.scene !== scene || candidate.status !== "debugged" ||
@@ -92,7 +81,7 @@ export function view(project: Project, id: string, selected: string[] | null = n
             !liveAttempt(project, candidate) || !intact(project, candidate.artifacts)) continue;
         const review = opinions.findLast(item => item.target_operation === "debug" && item.target_sha256 === sha && intact(project, item.artifacts));
         for (const [name, details] of Object.entries<RecordData>(candidate.cases)) {
-          if (preview.has(name)) continue;
+          if (preview.has(name) || !currentImplementation(candidate, name)) continue;
           const finding = review?.judgments[name] ?? null, observed = candidate.results[name].execution;
           const preparation = !finding ? "debug_pending_review" : designAllowsExecution(finding) ? "ready_for_execution" : "design_blocked";
           caseDesign.set(name, { ...caseDesign.get(name), ...details, debug: candidate.request_id, design_review: finding,
@@ -120,9 +109,10 @@ export function view(project: Project, id: string, selected: string[] | null = n
       const runCases = new Map<string, RecordData>();
       for (const [name, item] of Object.entries<RecordData>(run.results)) {
         const receipt = item.execution, verdict = reviewValid ? review!.judgments[name] : null;
+        const currentCase = applicable && currentImplementation(run, name);
         let status = !evidenceValid ? "evidence_missing" : run.operation === "history" ? "historical" :
-          !applicable ? "stale" : verdict?.status ?? "pending_review";
-        if (baseline && evidenceValid && applicable) {
+          !currentCase ? "stale" : verdict?.status ?? "pending_review";
+        if (baseline && evidenceValid && currentCase) {
           status = receipt?.exit_code === 0 && item.coverage.status !== "unavailable" ? "baseline_passed" : "baseline_unverified";
         }
         const attachments = { ...item.attachments, ...receipt?.output }, coverage = item.coverage ?? {}, report = coverage.report;
@@ -162,20 +152,24 @@ export function view(project: Project, id: string, selected: string[] | null = n
         cases: Object.fromEntries(runCases) });
       if (developmentMode && (!planned || applicable)) {
         for (const [name, details] of Object.entries<RecordData>(run.cases)) {
+          if (!currentImplementation(run, name)) continue;
           expected.add(name);
           caseDesign.set(name, { ...caseDesign.get(name), ...details });
         }
       }
       if (applicable) {
         for (const [name, value] of runCases) {
+          if (!currentImplementation(run, name)) continue;
           fresh.set(name, value);
           if (dashboard) {
             currentRuns.set(name, run.request_id);
             currentAttempts.set(name, run.record);
           }
         }
-        for (const name of run.designed_case_ids ?? runCases.keys()) expected.add(name);
-        if (run.obligations && Object.keys(run.obligations).length) checklist = run.obligations;
+        if (!stableIds) {
+          for (const name of run.designed_case_ids ?? runCases.keys()) expected.add(name);
+          if (run.obligations && Object.keys(run.obligations).length) checklist = run.obligations;
+        }
       }
     }
     for (const name of expected) if (!fresh.has(name)) fresh.set(name, incompleteCase());
@@ -189,9 +183,18 @@ export function view(project: Project, id: string, selected: string[] | null = n
         outcomes.has("passed") && [...outcomes].every(value => ["passed", "baseline_passed"].includes(value)) ? "tdd_verified" : "tdd_in_progress";
     }
     for (const name of preview) if (!fresh.has(name)) fresh.set(name, incompleteCase());
+    const previousMatches = dashboard && planned && !match && !invalidated.has(scene) && lastMatch
+      ? Object.fromEntries(Object.entries<RecordData>(lastMatch.cases).filter(([caseId, item]) =>
+          !fresh.has(caseId) && item.status === "active" &&
+          (stableIds
+            ? Object.hasOwn(planned.cases, caseId) && planned.cases[caseId].checks.some((check: RecordData) => Object.hasOwn(item.covers, check.id))
+            : Object.keys(item.covers).some(name => Object.hasOwn(planned.obligations, name)))))
+      : {};
     result.scenes[scene] = { definition, cases: Object.fromEntries(fresh), history, missing_obligations: missing,
       status, case_design: Object.fromEntries(caseDesign),
-      ...(planned ? { case_plan: { ...reference, cases: planned.cases, gaps: planned.gaps } } : {}),
+      ...(planned ? { case_plan: { ...reference, cases: planned.cases, gaps: planned.gaps,
+        ...(dashboard && stableIds ? { case_identity: "design" } : {}) } } : {}),
+      ...(Object.keys(previousMatches).length ? { previous_case_matches: previousMatches } : {}),
       ...(dashboard ? { current_runs: Object.fromEntries(currentRuns), current_attempts: Object.fromEntries(currentAttempts),
         run_details: Object.fromEntries(runDetails) } : {}) };
   }

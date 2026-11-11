@@ -1,10 +1,10 @@
 /** Debug, formal execution and review records bound to actual test versions. */
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
-import { requireCurrentDesign } from "./case_design.mts";
+import { caseMatches, currentCaseImplementation, requireCurrentDesign } from "./case_design.mts";
 import { projectMeasure } from "./coverage_adapter.mts";
 import { measurePython } from "./coverage_python.mts";
-import { argv, capture, fileBindings, local, projectRef, requestedTimeout, upstream, verifyBindings, verifyCheckout } from "./evidence.mts";
+import { argv, attempts, capture, fileBindings, local, projectRef, requestedTimeout, upstream, verifyBindings, verifyCheckout } from "./evidence.mts";
 import {
   Blocked, Project, atomicWrite, compareText, digest, equal, parseJson, readJson, requireText, resolvedFile, stat, token, type RecordData,
 } from "./records.mts";
@@ -126,6 +126,7 @@ export async function debug(project: Project, id: string, request: RecordData, _
     case_obligations: Object.fromEntries(Object.keys(cases).filter(name => Object.hasOwn(matched.cases, name))
       .map(name => [name, Object.keys(matched.cases[name].covers).sort(compareText)])),
     obligations: matched.obligations, cwd, revision: runtime.revision ?? null, artifacts: evidenceFiles(project, path),
+    ...(matched.implementation_sha256 ? { implementation_sha256: matched.implementation_sha256 } : {}),
     ...(caseDesign ? { case_design: caseDesign } : {}) };
 }
 export function boundAttempt(project: Project, id: string, section: string, key: string, expected: string): [RecordData, string] {
@@ -229,14 +230,22 @@ export async function execute(project: Project, id: string, request: RecordData,
   const [design, sha] = boundAttempt(project, id, "debug", assessment.target, "debugged");
   if (sha !== assessment.target_sha256) throw new Blocked("reviewed design evidence changed");
   const caseDesign = design.case_design;
-  requireCurrentDesign(project, id, request, caseDesign);
-  verifyBindings(project, design.bindings);
-  verifyBindings(project, design.artifacts);
+  const currentDesign = requireCurrentDesign(project, id, request, caseDesign);
   const selected: string[] = request.selected_case_ids;
   if (!Array.isArray(selected) || !selected.length || new Set(selected).size !== selected.length) {
     throw new Blocked("provide distinct case ids for this run");
   }
   if (selected.some(key => !designAllowsExecution(assessment.judgments[key] ?? {}))) throw new Blocked("selected cases lack a passing design review");
+  if (currentDesign?.[0].case_identity === "design") {
+    const matches = attempts(project, id, "match").map(([row]) => row);
+    const { current } = caseMatches(project, matches, request.scene, request.definitions_sha256, currentDesign);
+    const stale = selected.filter(caseId => !currentCaseImplementation(current, design, caseId));
+    if (stale.length) {
+      throw new Blocked(`no current reviewed implementation for ${stale.join(", ")}; match the current implementation, then debug and review it before executing`);
+    }
+  }
+  verifyBindings(project, design.bindings);
+  verifyBindings(project, design.artifacts);
   const coverage = design.coverage_preparation ? coveragePolicy(project, id, { ...request, coverage: design.coverage_preparation }) : null;
   const cases = Object.fromEntries(selected.map(key => [key, design.cases[key]]));
   const results = await runCases(project, request, path, cases, coverage, design.cwd ?? ".");
@@ -247,6 +256,7 @@ export async function execute(project: Project, id: string, request: RecordData,
     obligations: design.obligations ?? {}, designed_case_ids: designed,
     selection: selected.length === designed.length ? "all_designed_cases" : "selected_cases_only",
     bindings: design.bindings, artifacts: evidenceFiles(project, path), cwd: design.cwd ?? ".", revision: design.revision ?? null,
+    ...(design.implementation_sha256 ? { implementation_sha256: design.implementation_sha256 } : {}),
     ...(caseDesign ? { case_design: caseDesign } : {}) };
 }
 
@@ -275,13 +285,14 @@ export function manual(project: Project, id: string, request: RecordData, _defin
     throw new Blocked("manual evidence needs actual case observations");
   }
   const productVersion = requireText(request.product_version, "observed product version");
-  let obligations = {}, planned: RecordData = {}, caseDesign;
+  let obligations = {}, planned: RecordData = {}, caseDesign, implementationSha;
   if (request.match) {
     const matched = upstream(project, id, request, "match", "match", "matched");
     if (matched.scene !== request.scene) throw new Blocked("manual matching belongs to a different scene");
     obligations = matched.obligations;
     planned = Object.fromEntries(Object.entries<RecordData>(matched.cases).filter(([, item]) => item.kind === "manual"));
     caseDesign = matched.case_design;
+    implementationSha = matched.implementation_sha256;
   }
   requireCurrentDesign(project, id, request, caseDesign);
   if (request.match && Object.keys(cases).some(name => !Object.hasOwn(planned, name) || planned[name].status !== "active")) {
@@ -312,5 +323,7 @@ export function manual(project: Project, id: string, request: RecordData, _defin
   return { status: "observed", results, bindings, product_version: productVersion, selection: "selected_cases_only",
     obligations, case_obligations: Object.fromEntries(Object.keys(cases).filter(name => Object.hasOwn(planned, name))
       .map(name => [name, Object.keys(planned[name].covers).sort(compareText)])),
-    artifacts: evidenceFiles(project, path), ...(caseDesign ? { case_design: caseDesign } : {}) };
+    artifacts: evidenceFiles(project, path),
+    ...(implementationSha ? { implementation_sha256: implementationSha } : {}),
+    ...(caseDesign ? { case_design: caseDesign } : {}) };
 }

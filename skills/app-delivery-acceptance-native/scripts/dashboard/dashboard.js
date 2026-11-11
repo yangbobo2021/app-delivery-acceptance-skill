@@ -12,7 +12,7 @@ const labels = {
   baseline_passed: "开发前验证通过", baseline_unverified: "开发前验证待确认", tdd_baseline_verified: "开发前验证已通过",
   verified: "已验证", failed: "失败", recheck: "待复验", untested: "未验证", unconfirmed: "待确认",
   source_missing: "依据缺失", conflict: "依据冲突", blocked: "受阻",
-  planned: "已设计 · 待实现",
+  planned: "已设计 · 待实现", rematch_required: "待重新匹配",
 };
 const get = id => document.getElementById(id);
 const detail = get("detail");
@@ -87,7 +87,9 @@ function readSnapshot(snapshot) {
   }
   const connected = new Set();
   for (const [id, scene] of Object.entries(snapshot.scenes)) {
-    const plan = Object.entries(scene.case_plan?.cases ?? {});
+    const planned = scene.case_plan?.cases ?? {};
+    const plan = Object.entries(planned);
+    const stableIds = scene.case_plan?.case_identity === "design";
     const heading = title(scene.definition.source, id);
     const subject = heading.slice(id.length);
     const sceneKey = add(key("scene", id), {
@@ -103,24 +105,31 @@ function readSnapshot(snapshot) {
       link(parent, sceneKey);
     }
     const cases = [];
-    const implemented = new Set();
-    const caseIds = new Set([...Object.keys(scene.cases), ...scene.history.flatMap(r => Object.keys(r.cases))]);
-    for (const caseId of [...caseIds].sort()) {
+    const represented = new Set();
+    const caseIds = stableIds ? Object.keys(planned) :
+      [...new Set([...Object.keys(scene.cases), ...Object.keys(scene.previous_case_matches ?? {}),
+                   ...scene.history.flatMap(r => Object.keys(r.cases))])].sort();
+    for (const caseId of caseIds) {
       const item = scene.cases[caseId];
       const design = scene.case_design?.[caseId];
+      const previousMatch = design ? undefined : scene.previous_case_matches?.[caseId];
+      const association = design ?? previousMatch;
       const preparation = snapshot.mode !== "development" ? design?.preparation : undefined;
       const history = scene.history.filter(r => r.cases[caseId]);
-      const manual = design?.kind === "manual" || history.some(run => run.operation === "manual");
-      const descriptions = plan.flatMap(([, spec]) => {
-        const checks = spec.checks.filter(step => Object.hasOwn(design?.covers ?? {}, step.id));
-        if (design?.status !== "skipped") checks.forEach(step => implemented.add(step.id));
+      const spec = stableIds ? planned[caseId] : undefined;
+      const manual = (spec?.kind ?? association?.kind) === "manual" || history.some(run => run.operation === "manual");
+      const descriptions = spec ? [spec] : plan.flatMap(([, spec]) => {
+        const checks = spec.checks.filter(step => Object.hasOwn(association?.covers ?? {}, step.id));
+        if (association?.status !== "skipped") checks.forEach(step => represented.add(step.id));
         return checks.length ? [describeChecks(spec, checks)] : [];
       });
+      const state = previousMatch ? "rematch_required" : design?.status === "skipped" ? "skipped" :
+        item?.status === "not_executed" ? preparation ?? item.status : item?.status ?? (spec ? "planned" : undefined);
       const caseKey = add(key("case", id, caseId), {
         label: caseId, kind: manual ? "人工验证" : "自动用例", type: "case",
-        title: descriptions.map(spec => spec.title).join("、") || design?.selector?.trim() || caseId,
-        source: design?.source, design, descriptions, preparation,
-        status: design?.status === "skipped" ? "skipped" : item?.status === "not_executed" ? preparation ?? item.status : item?.status,
+        title: descriptions.map(spec => spec.title).join("、") || association?.selector?.trim() || caseId,
+        source: association?.source, design, descriptions, preparation, previousMatch: Boolean(previousMatch),
+        status: state,
       });
       link(sceneKey, caseKey);
       let execution, review, outcome;
@@ -147,17 +156,18 @@ function readSnapshot(snapshot) {
           });
           link(runKey, reviewKey);
         }
-        if (currentAttempt ? identity === currentAttempt : run.run === currentRun || (!currentRun && run === history.at(-1))) {
+        if (currentAttempt ? identity === currentAttempt :
+            run.run === currentRun || (!stableIds && !previousMatch && !currentRun && run === history.at(-1))) {
           execution = runKey;
           review = reviewKey;
           outcome = observed.status;
         }
       }
       cases.push({id: caseKey, execution, review, attempts: history.length,
-                  outcome: outcome ?? (design?.status === "skipped" ? "skipped" : preparation ?? "not_executed")});
+                  outcome: outcome ?? (state === "planned" ? "not_executed" : state) ?? "not_executed"});
     }
-    for (const [name, spec] of plan) {
-      const checks = spec.checks.filter(step => !implemented.has(step.id));
+    for (const [name, spec] of stableIds ? [] : plan) {
+      const checks = spec.checks.filter(step => !represented.has(step.id));
       if (!checks.length) continue;
       const description = describeChecks(spec, checks);
       const designKey = add(key("case-plan", id, name), {
@@ -500,6 +510,9 @@ function sceneOverview(body, node) {
 
 function caseOverview(body, node) {
   detailSection(body, "关联场景").append(relationList(node, "scene"));
+  if (node.previousMatch) {
+    detailSection(body, "匹配状态").append(element("p", "此用例沿用之前的关联供查看，当前设计仍待重新匹配。"));
+  }
   if (node.preparation && node.status === node.preparation) {
     const section = detailSection(body, "调试与设计复审");
     const {debug, debug_exit_code: exitCode, design_review: finding} = node.design;

@@ -47,6 +47,15 @@ export function fileBindings(project: Project, names: string[]) {
 export function verifyBindings(project: Project, bindings: Record<string, string>) {
   if (!equal(fileBindings(project, Object.keys(bindings)), bindings)) throw new Blocked("bound project files have changed");
 }
+export function bindingsIntact(project: Project, bindings?: Record<string, string>) {
+  try {
+    if (bindings && Object.keys(bindings).length) verifyBindings(project, bindings);
+    return true;
+  } catch (error) {
+    if (error instanceof Blocked || (error as NodeJS.ErrnoException).code) return false;
+    throw error;
+  }
+}
 export function verifyCheckout(project: Project, record: RecordData) {
   if (record.revision && Object.hasOwn(record, "cwd")) {
     const revision = git(project.path(record.cwd), ["rev-parse", "--verify", "HEAD"]);

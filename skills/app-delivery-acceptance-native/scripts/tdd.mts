@@ -38,7 +38,7 @@ export async function red(project: Project, id: string, request: RecordData, _de
   if (!caseId.startsWith("TC-")) throw new Blocked("case ids must start with TC-");
   const item: RecordData = { command: argv(request.command), files: request.test_files };
   const tests = fileBindings(project, item.files);
-  let caseDesign;
+  let caseDesign, implementationSha;
   if (request.match) {
     const matched = upstream(project, id, request, "match", "match", "matched"), implementation = matched.cases[caseId];
     if (matched.scene !== request.scene || implementation?.status !== "active" || implementation.kind === "manual" ||
@@ -47,6 +47,7 @@ export async function red(project: Project, id: string, request: RecordData, _de
     }
     Object.assign(item, { source: implementation.source, covers: implementation.covers });
     caseDesign = matched.case_design;
+    implementationSha = matched.implementation_sha256;
   }
   requireCurrentDesign(project, id, request, caseDesign);
   if (Object.hasOwn(request, "source")) {
@@ -62,6 +63,7 @@ export async function red(project: Project, id: string, request: RecordData, _de
   const failed = Number.isInteger(code) && code > 0 && observed.coverage.status !== "unavailable";
   return { ...result, status: failed ? "red_observed" : "blocked",
     reason: failed ? null : "expected a completed failing test with required evidence", artifacts: evidenceFiles(project, path),
+    ...(implementationSha ? { implementation_sha256: implementationSha } : {}),
     ...(caseDesign ? { case_design: caseDesign } : {}) };
 }
 export async function green(project: Project, id: string, request: RecordData, _definitions: RecordData, path: string) {
@@ -87,5 +89,6 @@ export async function green(project: Project, id: string, request: RecordData, _
     row.execution?.exit_code === 0 && row.coverage.status !== "unavailable");
   return { ...result, status: passed ? "green_observed" : "blocked", reason: passed ? null : "the original test or project regression did not pass",
     red: original.request_id, red_review: review.request_id, regression, artifacts: evidenceFiles(project, path),
+    ...(original.implementation_sha256 ? { implementation_sha256: original.implementation_sha256 } : {}),
     ...(caseDesign ? { case_design: caseDesign } : {}) };
 }

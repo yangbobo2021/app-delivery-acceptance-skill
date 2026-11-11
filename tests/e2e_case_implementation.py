@@ -29,7 +29,7 @@ def seed_design(project, definitions_sha):
     return tool(project, "operations", "case-design", IDENTIFIER, payload={
         "request_id": "approved-design", "scene": "SC1", "definitions_sha256": definitions_sha,
         "obligations": [{"id": key, "quote": quote} for key, quote, _, _ in CHECKS],
-        "cases": {"D-conflict": {
+        "cases": {"TC-conflict": {
             "title": "同室重叠拒绝且保留原预约", "kind": "automated",
             "preconditions": "用独立临时数据库，通过真实 CLI 操作。",
             "checks": [{"id": key, "action": action, "expected": expected} for key, _, action, expected in CHECKS],

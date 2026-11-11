@@ -173,7 +173,7 @@ def review(output, root, skill, model):
         tool(root, "operations", "case-design", identifier, payload={
             "request_id": f"design-{name}", "scene": name, "definitions_sha256": receipt["sha256"],
             "obligations": [{"id": key, "quote": criterion} for key, criterion in zip(ids, criteria)],
-            "cases": {"D-close": {"title": "关闭工单", "kind": "manual", "preconditions": "有一张待处理工单",
+            "cases": {"TC-close": {"title": "关闭工单", "kind": "manual", "preconditions": "有一张待处理工单",
                                   "checks": [{"id": key, "action": action, "expected": expected}
                                              for key, (action, expected) in zip(ids, actions)]}},
         })

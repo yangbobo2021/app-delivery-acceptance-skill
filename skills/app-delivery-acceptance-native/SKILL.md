@@ -24,8 +24,8 @@ description: 在 Codex 中执行交付验收、按已确认需求进行测试驱
 续接已有 PLAN 时，把现存的长条目也改写成业务短句，并保留真实状态。实际结果落盘后才勾选。阻塞时简述原因并保留依赖项为待办。每条需求在最终 PLAN 保留独立的简短结论。若宿主没有计划工具，说明当前会话的进度展示限制。
 
 - [需求基线与场景](references/definitions/entry.md)负责创建验收、记录需求基线、生成或修订测试场景、核对范围及查询。仅创建、仅记录需求基线或仅查看时，完成对应操作后停止。
-- [用例设计](references/case-preparation/design.md)按当前测试场景设计自然语言用例，交付必测检查及设计缺口。只设计时读回设计收据后停止。
-- [用例实现](references/case-preparation/implementation.md)按已落盘设计[匹配已有测试](references/case-preparation/entry.md)，按授权补充代码或人工验证步骤。只匹配时交付实际匹配和缺口后停止。
+- [用例设计](references/case-preparation/design.md)按当前测试场景为每个用例确定 TC ID 和自然语言描述，记录必测检查及设计缺口。只设计时读回设计收据后停止。
+- [用例实现](references/case-preparation/implementation.md)按设计的 TC ID [关联已有测试](references/case-preparation/entry.md)，按授权补充代码或人工验证步骤。只匹配时交付实际匹配和缺口后停止。
 - [测试与覆盖环境](references/case-preparation/environment.md)负责运行探测和采集探测。只准备环境时以实际就绪或阻塞收据为终点。
 - [执行与复审](references/execution/entry.md)负责正式执行、证据、独立复审、历史复核及授权内的返修。只准备用例时在核对设计和实现的独立复审后停止。
 - [结果展示](references/results/entry.md)负责读取结果和导出报告。用户只看结果时以已有材料交付。
