@@ -776,6 +776,7 @@ class OperationsTests(unittest.TestCase):
         })
         product = self.root / "candidate.txt"
         product.write_text("candidate one")
+        reviews = []
         for run in ("first", "second"):
             evidence = self.root / f"{run}.txt"
             evidence.write_text(f"Observed 409 in the {run} run.")
@@ -806,7 +807,22 @@ class OperationsTests(unittest.TestCase):
                     }, 2)
                     self.assertIn("assigned", rejected["reason"])
                 self.operation("match", {**match, "request_id": "manual-match-revised"})
-            self.operation("review", review)
+            reviews.append(review)
+
+        inbox = self.root / ".acceptance-local/native-v1" / self.id / "review-inbox"
+        inbox.mkdir()
+        first, second = reviews
+        first_file = inbox / "review-first.json"
+        first_file.write_text(first.pop("raw_review"))
+        first_review = self.operation("review", {**first, "review_file": first_file.relative_to(self.root).as_posix()})
+        self.assertEqual((self.root / first_review["reviewer_response"]).read_bytes(), first_file.read_bytes())
+        partial = self.run_json("results", ["view", self.id], None, 0)
+        history = partial["scenes"]["SC1"]["history"]
+        self.assertEqual([row["cases"]["TC-manual"]["status"] for row in history], ["passed", "pending_review"])
+        self.assertEqual(partial["requirement_results"]["R1"]["status"], "pending_delivery_review")
+        self.assertNotIn("delivery_judgment", partial["requirement_results"]["R1"])
+        self.operation("review", {**second, "request_id": "wrong-version", "target_sha256": first["target_sha256"]}, 2)
+        self.operation("review", second)
         view = self.run_json("results", ["view", self.id], None, 0)
         scene = view["scenes"]["SC1"]
         self.assertEqual(scene["case_design"]["TC-manual"]["kind"], "manual")
