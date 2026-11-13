@@ -12,9 +12,34 @@
 - [匹配与环境准备阶段验证结果](docs/stage-2-results.md)
 - [执行、报告与生命周期验证结果](docs/stage-3-to-6-results.md)
 
-## 试用当前候选版
+## 安装和首次使用
 
-需要 Node.js 24.12+ 和能加载项目 Skill 的 Codex。运行 Skill 自身无需编译或安装 npm 依赖。把 [Skill 目录](skills/app-delivery-acceptance-native) 放到试用项目的 `.agents/skills/app-delivery-acceptance-native`。Git 项目先核对 `.acceptance-local/native-v1/` 已实际被忽略。启用原生计划工具的 Codex 会在执行中显示进度。
+需要 Node.js 24.12+ 和能加载项目 Skill 的 Codex。完整正式验收和 TDD 需要当前会话支持启动独立子 Agent。实际 Agent 流程已在 macOS 的 Codex 验证，Linux 和 Windows 有脚本回归。安装 Skill 本身无需编译或安装 npm 依赖。
+
+选择交付方给出的 Git 标签或完整提交号，从该版本复制 [Skill 目录](skills/app-delivery-acceptance-native) 到项目的 `.agents/skills/app-delivery-acceptance-native`。更新时先选定新版本，再替换该 Skill 目录。项目的 `.acceptance/` 和 `.acceptance-local/` 是续接和追溯所需的数据，升级时保留。
+
+拿到交付的 `.tar.gz` 安装包时，在项目根运行以下命令。将 `<安装包路径>` 替换为实际路径。更新时先移出旧 Skill 目录，再解压新包。
+
+```sh
+mkdir -p .agents/skills
+tar -xzf '<安装包路径>' -C .agents/skills
+```
+
+Git 项目可将 `.acceptance-local/native-v1/` 加到 `.git/info/exclude`，或由项目团队在 `.gitignore` 中统一维护。用 `git check-ignore -- .acceptance-local/native-v1/` 核对。里面可能包含真实截图、请求日志和复审原文。对外分享前检查离线报告及其附件的实际内容。
+
+打开项目中的新 Codex 对话，输入 `$app-delivery-acceptance-native` 并选择本项目安装的 Skill。正式验收、TDD 和维护盘点可分别从下面三条开始，替换其中的路径和需求 ID：
+
+```text
+$app-delivery-acceptance-native 按 specs/ 中的 R1 对当前版本做正式交付验收，允许补写测试，不修改产品代码。
+$app-delivery-acceptance-native 按 specs/ 中已确认的 R1 做 TDD，允许补写测试和实现 R1，交付红灯、绿灯和独立复审。
+$app-delivery-acceptance-native 盘点 specs/ 中 R1 的当前交付状态，只使用已有记录，不执行测试或修改产品。
+```
+
+会话中断后，在同一项目的新对话继续：
+
+```text
+$app-delivery-acceptance-native 继续 AT-demo，沿用上次范围。先读取已保存的有效结果，再完成剩余的验收和独立复审。
+```
 
 在该项目的 Codex 对话中输入：
 
